@@ -1,0 +1,23 @@
+# Secretos de Streamlit: nunca deben subirse al repositorio.
+.streamlit/secrets.toml
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Exportaciones locales
+*.xlsx
+*.csv
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

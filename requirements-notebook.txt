@@ -1,0 +1,8 @@
+# Lo necesario para ejecutar y regenerar notebooks/estudio_precios_tarjetas.ipynb.
+# La app sólo necesita requirements.txt (es lo que instala Streamlit Cloud).
+-r requirements.txt
+scipy>=1.14
+matplotlib>=3.9
+ipykernel>=6.29
+nbformat>=5.10
+nbconvert>=7.16

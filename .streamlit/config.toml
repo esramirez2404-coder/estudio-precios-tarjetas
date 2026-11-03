@@ -1,0 +1,98 @@
+# Tema oscuro corporativo para el panel de estadísticas del sistema financiero.
+#
+# Las superficies salen del navy de marca (#20397F) llevado a luminosidades bajas;
+# el texto es el gris claro de marca (#E5E6E8) y el acento principal el Sky Blue
+# (#009FE3). El amarillo brillante (#FCDA01) se reserva como acento puntual.
+#
+# La escala categórica de los gráficos está validada sobre este fondo: banda de
+# luminosidad, piso de croma, separación para daltonismo (ΔE 8.2 en el peor par
+# adyacente), piso de visión normal (19.8) y contraste ≥ 3:1. No cambiar un color
+# suelto sin volver a validarla: los dos cianes y los dos amarillos del manual de
+# marca son indistinguibles entre sí (ΔE 0.6) y no sirven como series contiguas.
+
+[theme]
+base = "dark"
+primaryColor = "#009FE3"
+backgroundColor = "#0A142F"
+secondaryBackgroundColor = "#182544"
+codeBackgroundColor = "#101B38"
+textColor = "#E5E6E8"
+codeTextColor = "#B6E5FF"
+linkColor = "#1FA9E2"
+borderColor = "#2E406D"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "6px"
+buttonRadius = "6px"
+
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+codeFontSize = "13px"
+headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+linkUnderline = false
+
+# Colores semánticos. El amarillo de marca hace de advertencia, que es donde más
+# se nota y donde su brillo trabaja a favor.
+greenColor = "#00A749"
+redColor = "#E1388D"
+yellowColor = "#FCDA01"
+orangeColor = "#D26100"
+blueColor = "#009FE3"
+violetColor = "#A558EB"
+grayColor = "#8F9BB8"
+
+dataframeBorderColor = "#2E406D"
+dataframeHeaderBackgroundColor = "#182544"
+
+# Escala categórica validada, diez series. Los dos primeros son los tonos de marca:
+# el Sky Blue tal cual y el amarillo de marca en un paso más profundo, porque el
+# #FCDA01 original (L 0.89) queda fuera de la banda oscura y opacaría al resto.
+#
+# **El orden es parte de la validación, no es decorativo.** El turquesa de la
+# novena posición separa el azul del rojo: con otra secuencia, verde y rojo quedan
+# contiguos y su separación cae a ΔE 1.7 bajo deuteranopía (indistinguibles). Si
+# reordenas o añades un color, vuelve a pasar el validador.
+chartCategoricalColors = [
+    "#009FE3",
+    "#B29000",
+    "#E1388D",
+    "#00A749",
+    "#A558EB",
+    "#D26100",
+    "#00A0A2",
+    "#4879FF",
+    "#00A480",
+    "#E24A45",
+]
+
+# Rampa secuencial de un solo tono (Sky Blue de marca). En oscuro el extremo
+# brillante es el valor alto, para que "más" se lea como "más luminoso".
+chartSequentialColors = [
+    "#003758",
+    "#004974",
+    "#005C8F",
+    "#006FAA",
+    "#0083C9",
+    "#0097E1",
+    "#00ACF7",
+    "#2BC1FF",
+    "#81D4FF",
+    "#B6E5FF",
+]
+
+[theme.sidebar]
+backgroundColor = "#101B38"
+secondaryBackgroundColor = "#20397F"
+codeBackgroundColor = "#0A142F"
+textColor = "#E5E6E8"
+borderColor = "#2E406D"
+primaryColor = "#1FA9E2"
+
+[server]
+# Los rangos amplios pueden devolver muchos registros; el mensaje por websocket
+# debe poder cargarlos sin cortarse.
+maxMessageSize = 400

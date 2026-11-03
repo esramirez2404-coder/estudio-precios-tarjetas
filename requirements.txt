@@ -1,0 +1,9 @@
+streamlit>=1.63
+pandas>=2.2
+altair>=5.4
+requests>=2.32
+openpyxl>=3.1
+
+# Valida TLS con el almacen de certificados del sistema. Imprescindible en redes
+# corporativas que inspeccionan HTTPS con su propia CA (Fortinet, Zscaler...).
+truststore>=0.10
