@@ -24,13 +24,53 @@ from simbad.estudio_tarjetas import (
     precio_por_entidad,
 )
 
-#: Color del cargo elegido cuando se resalta entre los demás servicios.
-COLOR_CARGO = "#FCDA01"
+#: Escala de color de las gamas, la misma en todos los gráficos de la página.
+ESCALA_GAMAS = alt.Scale(domain=ORDEN_GAMAS, range=[ui.COLORES_GAMA[g] for g in ORDEN_GAMAS])
+
+#: Eje de las gamas, en su orden y con las etiquetas en horizontal.
+EJE_GAMAS = alt.X("gama:N", sort=ORDEN_GAMAS, title=None, axis=alt.Axis(labelAngle=0))
+
+
+def eje_precio(campo: str, titulo: str) -> alt.Y:
+    """Eje de precios en escala logarítmica.
+
+    Un solo banco caro aplastaba las cajas de las otras gamas. En escala logarítmica la
+    misma distancia vertical es el mismo múltiplo, que es de lo que trata el estudio.
+    """
+    return alt.Y(
+        f"{campo}:Q",
+        title=f"{titulo}, escala logarítmica",
+        scale=alt.Scale(type="log", nice=False),
+        axis=alt.Axis(format=",.3~r", tickCount=6),
+    )
 
 
 def _con_unidad(valor: float, unidad: str) -> str:
     """Precio con su unidad: ``3.50 %`` o ``1,200.00 DOP``."""
     return f"{valor:,.2f} %" if unidad == "%" else f"{valor:,.2f} {unidad}"
+
+
+def _cargo_en_una_periodicidad(filas: pd.DataFrame) -> pd.DataFrame:
+    """Filas del cargo con una sola periodicidad, por defecto la más frecuente.
+
+    Cobrar 1,500 al año no es el mismo precio que cobrar 1,500 al mes, y mezclarlos
+    contaminaría la comparación entre períodos: «Cargo por Renovación» es anual en casi
+    todas sus filas, pero en 2026 aparecen filas mensuales que en 2025 no existían.
+    """
+    periodicidades = filas["periodicidad"].value_counts().index.tolist()
+    if len(periodicidades) == 1:
+        return filas
+    periodicidad = st.segmented_control(
+        "Periodicidad del cargo",
+        options=periodicidades,
+        default=periodicidades[0],
+        required=True,
+        format_func=lambda p: str(p).capitalize(),
+        key=f"tarj_periodicidad_{filas['concepto'].iloc[0]}",
+        help="Este cargo se publica con más de una periodicidad; cada una se analiza por "
+        "separado.",
+    )
+    return filas[filas["periodicidad"] == (periodicidad or periodicidades[0])]
 
 
 def _cargo_en_una_unidad(filas: pd.DataFrame) -> pd.DataFrame:
@@ -129,12 +169,14 @@ def _descriptiva_cargo(descriptiva: pd.DataFrame) -> None:
 
 def _distribucion_cargo(por_entidad: pd.DataFrame, unidad: str) -> None:
     """Diagrama de caja por gama, con un punto por entidad encima."""
-    eje_y = alt.Y("valor:Q", title=f"Precio ({unidad})")
-    base = alt.Chart(por_entidad).encode(x=alt.X("gama:N", sort=ORDEN_GAMAS, title=None))
+    eje_y = eje_precio("valor", f"Precio ({unidad})")
+    base = alt.Chart(por_entidad).encode(x=EJE_GAMAS)
     caja = base.mark_boxplot(
-        size=70, outliers=False, color=ui.SERIE_PRINCIPAL, opacity=0.45
-    ).encode(y=eje_y)
-    puntos = base.mark_circle(size=70, color=COLOR_CARGO, opacity=0.9).encode(
+        size=70, outliers=False, opacity=0.55, median={"color": "#FFFFFF", "strokeWidth": 2}
+    ).encode(y=eje_y, color=alt.Color("gama:N", scale=ESCALA_GAMAS, legend=None))
+    puntos = base.mark_circle(
+        size=60, color="#E5E6E8", opacity=0.9, stroke="#0A142F", strokeWidth=1
+    ).encode(
         y=eje_y,
         tooltip=[
             alt.Tooltip("entidad:N", title="Entidad"),
@@ -173,6 +215,7 @@ def ficha_cargo(frame: pd.DataFrame, cargo: str) -> pd.DataFrame:
             icon=":material/info:",
         )
         return filas
+    filas = _cargo_en_una_periodicidad(filas)
     filas = _cargo_en_una_unidad(filas)
     unidad = filas["unidadValor"].iloc[0]
     por_entidad = precio_por_entidad(filas)
@@ -217,6 +260,49 @@ def ficha_cargo(frame: pd.DataFrame, cargo: str) -> pd.DataFrame:
     return filas
 
 
+def grafico_escalera(largo: pd.DataFrame, titulo_y: str, formato: str = ",.2f") -> None:
+    """Una línea por entidad a través de las gamas; la que está bajo el puntero se enciende.
+
+    Con veinte entidades, una leyenda de colores no se puede leer. Todas las líneas van
+    en un tono apagado, la del banco que se señala se resalta con su nombre al final, y
+    los puntos llevan el color de su gama. ``largo`` trae ``entidad``, ``gama`` y
+    ``precio``.
+    """
+    foco = alt.selection_point(
+        fields=["entidad"], on="pointerover", nearest=True, empty=False, clear="pointerout"
+    )
+    ultima = [g for g in ORDEN_GAMAS if g in set(largo["gama"])][-1]
+    base = alt.Chart(largo).encode(
+        x=EJE_GAMAS,
+        y=eje_precio("precio", titulo_y),
+        detail="entidad:N",
+    )
+    lineas = base.mark_line().encode(
+        color=alt.condition(foco, alt.value(ui.SERIE_RESALTADA), alt.value(ui.SERIE_APAGADA)),
+        opacity=alt.condition(foco, alt.value(1.0), alt.value(0.6)),
+        strokeWidth=alt.condition(foco, alt.value(3.5), alt.value(1.6)),
+    )
+    puntos = base.mark_circle(size=60).encode(
+        color=alt.Color("gama:N", scale=ESCALA_GAMAS, legend=None),
+        tooltip=[
+            alt.Tooltip("entidad:N", title="Entidad"),
+            alt.Tooltip("gama:N", title="Gama"),
+            alt.Tooltip("precio:Q", title="Precio", format=formato),
+        ],
+    ).add_params(foco)
+    nombre = (
+        base.mark_text(align="left", dx=10, fontSize=13, fontWeight="bold", color=ui.SERIE_RESALTADA)
+        .encode(text="entidad:N")
+        .transform_filter(foco)
+        .transform_filter(alt.datum.gama == ultima)
+    )
+    st.altair_chart(alt.layer(lineas, puntos, nombre).properties(height=420), width="stretch")
+    st.caption(
+        "Cuanto más empinada la línea, más multiplica esa entidad el precio. Pasa el "
+        "puntero sobre un punto para seguir su línea."
+    )
+
+
 def _lineas_por_entidad(ancho: pd.DataFrame, unidad: str) -> None:
     """Una línea por entidad, de su gama más baja a la más alta."""
     largo = (
@@ -224,22 +310,7 @@ def _lineas_por_entidad(ancho: pd.DataFrame, unidad: str) -> None:
         .reset_index()
         .melt(id_vars="entidad", var_name="gama", value_name="precio")
     )
-    lineas = (
-        alt.Chart(largo)
-        .mark_line(point=alt.OverlayMarkDef(size=70), strokeWidth=2)
-        .encode(
-            x=alt.X("gama:N", sort=ORDEN_GAMAS, title=None),
-            y=alt.Y("precio:Q", title=f"Precio ({unidad})"),
-            color=alt.Color("entidad:N", title="Entidad"),
-            tooltip=[
-                alt.Tooltip("entidad:N", title="Entidad"),
-                alt.Tooltip("gama:N", title="Gama"),
-                alt.Tooltip("precio:Q", title="Precio", format=",.2f"),
-            ],
-        )
-        .properties(height=420)
-    )
-    st.altair_chart(lineas, width="stretch")
+    grafico_escalera(largo, f"Precio ({unidad})")
 
 
 def escalera_por_gama(filas: pd.DataFrame) -> None:
@@ -279,7 +350,7 @@ def escalera_por_gama(filas: pd.DataFrame) -> None:
             hide_index=True,
             column_config={
                 **{g: st.column_config.NumberColumn(g, format="localized") for g in gamas},
-                "Multiplica": st.column_config.NumberColumn("Multiplica", format="%.1f ×"),
+                "Multiplica": ui.columna_veces("Multiplica", ancho["Multiplica"].max()),
             },
             height=420,
         )

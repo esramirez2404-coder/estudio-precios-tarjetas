@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 import pandas as pd
 import streamlit as st
 
+from simbad import historial
 from simbad.catalog import (
     AGGREGATE_MARKER,
     ENDPOINTS,
@@ -47,10 +48,10 @@ _DISCOVERY_WINDOW = 5
 _LATEST_LOOKBACK = 15
 
 #: Meses por llamada. El gateway abandona la consulta a los ~60 s y responde HTTP
-#: 504. La latencia del API es muy variable y no escala con el tamaño de la consulta
-#: —seis meses llegaron a tardar 92 s y doce, 45 s—, así que se trocea corto para que
-#: cada llamada quede con margen incluso cuando el servidor está lento.
-_MAX_MONTHS_PER_CALL = 6
+#: 504, y la latencia del API es muy variable, así que se trocea corto. Además, un mes
+#: del tarifario son 18 páginas: con más de tres meses por llamada se pasaría del tope
+#: de ``_MAX_PAGES`` y la respuesta llegaría cortada.
+_MAX_MONTHS_PER_CALL = 3
 
 
 def _window(periodo: str, months: int = _DISCOVERY_WINDOW) -> tuple[str, str]:
@@ -353,6 +354,13 @@ def load(
     )
     informe["rows_detalle"] = len(combinado)
     return combinado, informe
+
+
+def tarifario_por_meses(
+    meses: Sequence[str], al_avanzar: Callable[[int, int], None] | None = None
+) -> tuple[pd.DataFrame, list[str]]:
+    """Tarifario de varios meses para la línea de tiempo. Ver :mod:`simbad.historial`."""
+    return historial.descargar_meses(stored_api_key(), meses, al_avanzar=al_avanzar)
 
 
 def load_safe(

@@ -1,8 +1,12 @@
-# Tema oscuro corporativo para el panel de estadísticas del sistema financiero.
+# Tema oscuro del estudio de precios de tarjetas.
 #
 # Las superficies salen del navy de marca (#20397F) llevado a luminosidades bajas;
 # el texto es el gris claro de marca (#E5E6E8) y el acento principal el Sky Blue
-# (#009FE3). El amarillo brillante (#FCDA01) se reserva como acento puntual.
+# (#009FE3). El amarillo brillante (#FCDA01) se reserva como acento puntual: en los
+# gráficos marca la entidad que está bajo el puntero.
+#
+# Tipografía: Chivo, una grotesca de trazo técnico, en todo el texto; Chivo Mono sólo
+# para el código y el número grabado de la tarjeta de la portada.
 #
 # La escala categórica de los gráficos está validada sobre este fondo: banda de
 # luminosidad, piso de croma, separación para daltonismo (ΔE 8.2 en el peor par
@@ -22,17 +26,19 @@ linkColor = "#1FA9E2"
 borderColor = "#2E406D"
 showWidgetBorder = true
 showSidebarBorder = true
-baseRadius = "6px"
-buttonRadius = "6px"
+baseRadius = "10px"
+buttonRadius = "full"
 
-font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
-codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
-baseFontSize = 14
+font = "Chivo:https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;700;800&display=swap"
+headingFont = "Chivo:https://fonts.googleapis.com/css2?family=Chivo:wght@700;800;900&display=swap"
+codeFont = "'Chivo Mono':https://fonts.googleapis.com/css2?family=Chivo+Mono:wght@400;500;600&display=swap"
+baseFontSize = 15
 baseFontWeight = 400
 codeFontSize = "13px"
-headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
-headingFontWeights = [700, 600, 600, 600, 500, 500]
+headingFontSizes = ["34px", "26px", "20px", "16px", "14px", "12px"]
+headingFontWeights = [900, 800, 700, 700, 600, 600]
+metricValueFontSize = "1.85rem"
+metricValueFontWeight = 800
 linkUnderline = false
 
 # Colores semánticos. El amarillo de marca hace de advertencia, que es donde más
@@ -46,7 +52,8 @@ violetColor = "#A558EB"
 grayColor = "#8F9BB8"
 
 dataframeBorderColor = "#2E406D"
-dataframeHeaderBackgroundColor = "#182544"
+dataframeHeaderBackgroundColor = "#1B2BB8"
+dataframeHeaderTextColor = "#FFFFFF"
 
 # Escala categórica validada, diez series. Los dos primeros son los tonos de marca:
 # el Sky Blue tal cual y el amarillo de marca en un paso más profundo, porque el
@@ -85,12 +92,12 @@ chartSequentialColors = [
 ]
 
 [theme.sidebar]
-backgroundColor = "#101B38"
-secondaryBackgroundColor = "#20397F"
+backgroundColor = "#1B2BD6"
+secondaryBackgroundColor = "#0E1570"
 codeBackgroundColor = "#0A142F"
-textColor = "#E5E6E8"
-borderColor = "#2E406D"
-primaryColor = "#1FA9E2"
+textColor = "#FFFFFF"
+borderColor = "#6F8CFF"
+primaryColor = "#FFC400"
 
 [server]
 # Los rangos amplios pueden devolver muchos registros; el mensaje por websocket

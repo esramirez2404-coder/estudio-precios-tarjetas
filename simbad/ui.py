@@ -42,6 +42,15 @@ MESES = {
 #: hay una sola serie y el color no codifica identidad, como en los rankings.
 SERIE_PRINCIPAL = "#009FE3"
 
+#: Color de cada gama en los gráficos: el metal de la tarjeta de la portada llevado a
+#: un tono con contraste ≥ 3:1 sobre el fondo. Clásica reutiliza el Sky Blue de marca.
+COLORES_GAMA = {"Clásica": "#19C3FF", "Oro": "#FFC400", "Platino": "#E8EEF7"}
+
+#: La serie que está bajo el puntero se enciende con el amarillo de marca; las demás
+#: quedan en un navy apagado que no compite con ella.
+SERIE_RESALTADA = "#FCDA01"
+SERIE_APAGADA = "#3B4C78"
+
 
 # ------------------------------------------------------------- Acceso
 
@@ -98,8 +107,9 @@ def _selector_mes_anio(
     ultimo_mes: bool,
 ) -> str:
     """Par de desplegables año + mes que devuelve un período ``YYYY-MM``."""
-    fila = host.container(horizontal=True, gap="small")
-    anio = fila.selectbox(
+    # Columnas y no un contenedor horizontal: en la barra lateral, éste los apilaba.
+    col_anio, col_mes = host.columns([1, 1.25], gap="small")
+    anio = col_anio.selectbox(
         f"{etiqueta} — año",
         options=anios,
         index=anios.index(defecto[:4]) if defecto[:4] in anios else 0,
@@ -110,7 +120,7 @@ def _selector_mes_anio(
         indice = meses.index(defecto[5:7])
     else:
         indice = len(meses) - 1 if ultimo_mes else 0
-    mes = fila.selectbox(
+    mes = col_mes.selectbox(
         f"{etiqueta} — mes",
         options=meses,
         index=indice,
@@ -128,6 +138,7 @@ def period_range_selector(
     default_months: int = 24,
     container=None,
     endpoint_id: str | None = None,
+    apilado: bool = False,
 ) -> tuple[str, str]:
     """Selector de rango de períodos con desplegables de año y mes.
 
@@ -138,6 +149,9 @@ def period_range_selector(
     Con ``endpoint_id`` la lista llega sólo hasta el último mes que ese conjunto
     tiene publicado. Cada conjunto lleva su propio rezago y elegir un mes posterior
     devolvía un HTTP 403 desconcertante.
+
+    Con ``apilado`` el «desde» y el «hasta» van uno debajo del otro, para la barra
+    lateral, donde cuatro desplegables en una fila no caben.
     """
     host = container or st
     latest = data.latest_period_for(endpoint_id)
@@ -149,7 +163,7 @@ def period_range_selector(
     defecto_inicio = options[max(0, len(options) - default_months)]
     anios = sorted({p[:4] for p in options}, reverse=True)
 
-    columnas = host.columns(2)
+    columnas = [host.container(), host.container()] if apilado else host.columns(2)
     inicio = _selector_mes_anio(
         columnas[0],
         etiqueta="Desde",
@@ -169,7 +183,7 @@ def period_range_selector(
         ultimo_mes=True,
     )
 
-    if endpoint_id and latest < data.latest_period():
+    if endpoint_id and latest < data.latest_period() and not apilado:
         host.caption(
             f"Este conjunto se publica con más rezago que el resto: el último mes "
             f"disponible es **{MESES[latest[5:7]]} {latest[:4]}**."
@@ -240,9 +254,7 @@ def apply_gate(*, key: str, pending: Any, container=None, label: str = "Consulta
         st.session_state[almacen] = pending
         st.rerun()
     if hay_cambios:
-        fila.markdown(":orange[Hay filtros sin aplicar. Abajo siguen los resultados anteriores.]")
-    else:
-        fila.caption("Los resultados de abajo corresponden a estos filtros.")
+        fila.markdown(":orange[Hay cambios sin aplicar: la página sigue mostrando la consulta anterior.]")
     return st.session_state[almacen]
 
 
@@ -279,19 +291,35 @@ def dataframe(
     )
 
 
+def columna_veces(nombre: str, tope: float) -> Any:
+    """Columna «cuántas veces» con una barra, para ver de un vistazo quién se dispara."""
+    return st.column_config.ProgressColumn(
+        nombre,
+        format="%.1f ×",
+        min_value=1.0,
+        max_value=max(float(tope), 1.01),
+        color=SERIE_RESALTADA,
+    )
+
+
 def kpi_row(items: Sequence[dict]) -> None:
     """Fila de tarjetas KPI.
 
-    Cada elemento admite ``label``, ``value``, ``delta``, ``help`` y ``chart_data``.
+    Cada elemento admite ``label``, ``value``, ``delta``, ``delta_color``, ``help`` y
+    ``chart_data``. La clave del contenedor es la que da color a las tarjetas en
+    ``estilo.css``.
     """
     if not items:
         return
-    with st.container(horizontal=True):
+    sufijo = "".join(c for c in items[0]["label"] if c.isascii() and c.isalnum())
+    with st.container(horizontal=True, key=f"kpis_{sufijo}"):
         for item in items:
             st.metric(
                 item["label"],
                 item["value"],
                 item.get("delta"),
+                delta_color=item.get("delta_color", "normal"),
+                delta_arrow=item.get("delta_arrow", "auto"),
                 border=True,
                 help=item.get("help"),
                 chart_data=item.get("chart_data"),

@@ -6,6 +6,8 @@ Superintendencia de Bancos (SIMBAD) para comparar lo que cobra cada entidad por 
 mismo cargo de una tarjeta de crédito.
 """
 
+from pathlib import Path
+
 import streamlit as st
 
 st.set_page_config(
@@ -25,5 +27,7 @@ page = st.navigation(
     ],
 )
 
-st.title(page.title, icon=page.icon)
+st.html(Path(__file__).parent / "simbad" / "estilo.css")
+with st.container(key="cabecera"):
+    st.title(page.title, icon=page.icon)
 page.run()

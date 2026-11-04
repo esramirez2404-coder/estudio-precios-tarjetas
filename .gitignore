@@ -1,6 +1,9 @@
 # Secretos de Streamlit: nunca deben subirse al repositorio.
 .streamlit/secrets.toml
 
+# Meses del tarifario ya descargados (se regeneran solos)
+.cache/
+
 # Entornos virtuales
 .venv/
 venv/

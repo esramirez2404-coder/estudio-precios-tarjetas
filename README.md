@@ -13,8 +13,10 @@ El proyecto responde con datos del API de **Estadísticas del Sistema Financiero
 - un **notebook** que hace el mismo recorrido paso a paso, de la conexión al API al
   análisis del cargo, con el código a la vista.
 
-No se guarda ninguna copia local de los datos: la app consulta el API y se apoya en la
-caché de Streamlit (30 minutos para consultas, 6 horas para el último mes publicado).
+La app consulta el API en vivo y se apoya en la caché de Streamlit (30 minutos para
+consultas, 6 horas para el último mes publicado). Lo único que se guarda son los meses de
+la línea de tiempo, en `.cache/tarifario/`: cada uno tarda unos 40 segundos en bajar y un
+mes publicado no cambia. Esa carpeta no se sube al repositorio y se puede borrar sin riesgo.
 
 ## Requisitos
 
@@ -72,6 +74,24 @@ New-NetFirewallRule -DisplayName "Streamlit SIMBAD 8501" -Direction Inbound `
 
 ## La página *Precios de tarjetas*
 
+Abre con una tarjeta de crédito que lleva grabado el hallazgo: el número es cuántas veces
+cobra la entidad más cara lo que cobra la más barata, el titular es el cargo, la vigencia
+es el período y el metal es la gama (azul clásica, oro, plata platino). La tarjeta cambia
+con el cargo y la gama elegidos. El cargo, la moneda, el tipo de entidad y el período se
+eligen en el panel lateral, cuya pantalla resume lo que se está analizando.
+
+La página abre con la variable del grupo, **Cargo por Renovación anual**. Un cargo puede
+publicarse con varias periodicidades, y cada una se analiza por separado: cobrar 1,500 al
+año no es cobrar 1,500 al mes, y en 2026 aparecen filas mensuales y por adelantado de este
+cargo que en 2025 no existían.
+
+**La línea de tiempo** sigue el cargo elegido mes a mes y compara dos trimestres, por
+ejemplo T1 2025 y T1 2026: mediana por gama, cuántas entidades suben, bajan o no cambian, y
+cada entidad con sus dos precios. Sólo entran en la comparación las entidades que publicaron
+en ambos períodos, para que un banco nuevo no mueva la mediana. Con rangos de más de dos años
+dibuja un mes de cada tres o de cada seis, siempre con los meses comparados. Los precios son
+nominales: no descuentan la inflación.
+
 Descarga el tarifario completo del período elegido —un rango de año y mes desde/hasta,
 que por defecto es el último mes publicado (unos 9 000 registros, 40 segundos)— y
 calcula todo lo demás en pandas sobre esa respuesta, que queda en caché: cambiar de tipo
@@ -108,8 +128,9 @@ Todas las tablas se pueden descargar en CSV y Excel.
 clave y la sesión HTTP, la primera llamada, los errores que devuelve el API, el sondeo del
 último mes publicado, la descarga paginada, la exploración inicial, las filas repetidas,
 la limpieza, el embudo de filtros hasta el cargo del grupo, su estadística descriptiva,
-los atípicos, una prueba de Friedman entre gamas y la descomposición de la variación. Una
-sección final comprueba con `assert` que sus cifras coinciden con las de la app.
+los atípicos, una prueba de Friedman entre gamas, la descomposición de la variación y la
+línea de tiempo entre `PERIODO_A` y `PERIODO_B`. Una sección final comprueba con `assert`
+que sus cifras coinciden con las de la app.
 
 Se usa cambiando `CARGO` en la celda de parámetros y ejecutando todo de nuevo (*Restart
 Kernel and Run All Cells*). La clave nunca se imprime. Los CSV que exporta quedan en
@@ -134,6 +155,10 @@ simbad/
     data.py                 Capa con caché: credenciales, consultas y último mes publicado
     estudio_tarjetas.py     Cálculos del estudio (sin Streamlit)
     ficha_cargo.py          Ficha del cargo que analiza cada grupo
+    historial.py            Descarga del tarifario mes a mes, en paralelo (sin Streamlit)
+    linea_tiempo.py         La línea de tiempo y la comparación entre períodos
+    portada.py              La tarjeta de la portada y la pantalla del panel lateral
+    estilo.css              Capa visual: degradados, animación y colores por función
     transform.py            Filas agregadas, etiquetas legibles y exportación (sin Streamlit)
     ui.py                   Componentes de interfaz: período, tablas, KPIs, descargas
 notebooks/
@@ -211,7 +236,19 @@ cifra completa y separadores de miles, para poder auditarlos.
 El tema vive en `.streamlit/config.toml`: oscuro, sobre la paleta corporativa (navy
 `#20397F`, gris `#E5E6E8`, Sky Blue `#009FE3`). La escala categórica de los gráficos está
 validada contra ese fondo (separación bajo daltonismo y contraste ≥ 3:1); si cambias un
-color, vuelve a validar la escala completa en lugar de ajustar un valor suelto.
+color, vuelve a validar la escala completa en lugar de ajustar un valor suelto. La
+tipografía es Chivo; Chivo Mono queda para el código y el número grabado de la tarjeta.
+
+Cada gama tiene su color en todos los gráficos que las separan (`ui.COLORES_GAMA`). Los
+gráficos de precio por gama usan escala logarítmica: la misma distancia vertical es el
+mismo múltiplo, y un solo banco muy caro no aplasta a los demás. En los de líneas, la
+entidad bajo el puntero se enciende en amarillo con su nombre.
+
+El título y la banda de portada se mueven despacio, la tarjeta se anima al dibujarse y se
+endereza al señalarla; todo respeta la preferencia de movimiento reducido del sistema. El
+panel lateral imita una terminal de pago con su pantalla. La tarjeta se dibuja con CSS y no con SVG porque `st.html` elimina los `<svg>`
+al sanear el contenido. Si editas algo en `simbad/` y no ves el cambio, reinicia
+`streamlit run`: el servidor puede conservar esos módulos en memoria.
 
 ## Redes corporativas
 

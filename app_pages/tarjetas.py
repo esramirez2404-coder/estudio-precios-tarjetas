@@ -5,7 +5,7 @@ Página de análisis, no de consulta: responde a una pregunta concreta —¿cues
 mismo el mismo servicio en todos los bancos?— y deja a la vista cada llamada al API
 que sustenta las cifras, para poder reproducirlas o presentarlas.
 
-A diferencia del resto de la app, aquí se descarga **el tarifario completo del período
+Se descarga **el tarifario completo del período
 elegido de una sola vez** —todos los tipos de entidad, todas las monedas— y todo lo
 demás (tipo de entidad, moneda, tipo de cargo, gama) se calcula en pandas sobre esa
 respuesta. Esos controles reejecutan el script, pero la descarga sale de la caché de
@@ -27,15 +27,21 @@ import streamlit as st
 from simbad import data, ui
 from simbad.catalog import BASE_URL, ENDPOINTS, TIPOS_ENTIDAD
 from simbad.estudio_tarjetas import (
-    GAMAS,
+    CARGO_GRUPO,
     MINIMO_ENTIDADES,
     ORDEN_GAMAS,
     cargos_disponibles,
     dispersion,
+    estadistica_por_gama,
     explica,
     minimo_comparable,
+    nombre_variable,
+    precio_por_entidad,
+    precios_personales,
 )
-from simbad.ficha_cargo import escalera_por_gama, ficha_cargo, gama_o_banco
+from simbad.ficha_cargo import escalera_por_gama, ficha_cargo, gama_o_banco, grafico_escalera
+from simbad.linea_tiempo import linea_de_tiempo
+from simbad.portada import pantalla_terminal, tarjeta
 
 ENDPOINT = "TasasComisionesTarjetasCredito"
 RUTA = ENDPOINTS[ENDPOINT]["path"]
@@ -59,8 +65,13 @@ _numero_seccion = count(1)
 
 
 def seccion(titulo: str) -> None:
-    """Encabezado numerado de una sección del estudio."""
-    st.subheader(f"{next(_numero_seccion)} · {titulo}")
+    """Encabezado numerado de una sección del estudio.
+
+    El número va en el icono (``counter_1``…``counter_9``): el estudio es un argumento
+    en orden y en la presentación se cita por sección.
+    """
+    numero = next(_numero_seccion)
+    st.subheader(titulo, icon=f":material/counter_{numero}:" if numero <= 9 else None)
 
 
 # --------------------------------------------------------- Rastro de consultas
@@ -85,7 +96,59 @@ def _etiqueta_periodo(inicio: str, fin: str) -> str:
     return f"{_nombre_mes(inicio)} – {_nombre_mes(fin)}"
 
 
-# ------------------------------------------------------------- Qué es esto
+# ------------------------------------------------------------------ Portada
+
+PREGUNTA = "¿Cuesta lo mismo el mismo cargo en todos los bancos?"
+
+
+def _respuesta(veces: float, gama: str, servicio: str) -> str:
+    """La respuesta a la pregunta de la portada, en una frase y con la cifra."""
+    if veces < 1.1:
+        return (
+            f"**Prácticamente sí.** En la gama {gama.lower()}, «{servicio}» varía como "
+            f"mucho {veces:.1f} veces entre la entidad más barata y la más cara."
+        )
+    return (
+        f"**No.** En la gama {gama.lower()}, la entidad más cara cobra **{veces:.1f} "
+        f"veces** lo que la más barata por «{servicio}»: el mismo servicio, en el mismo "
+        "tipo de tarjeta."
+    )
+
+
+def llenar_portada(
+    *, gama: str, veces: float, servicio: str, entidades: int, inicio: str, fin: str
+) -> None:
+    """La tarjeta con el hallazgo grabado y, a su lado, la pregunta y su respuesta."""
+    with portada:
+        izq, der = st.columns([5, 6], gap="large", vertical_alignment="center")
+        with izq:
+            tarjeta(
+                gama=gama,
+                cifra=f"{veces:.1f}×",
+                leyenda=(
+                    "lo que cobra la entidad más cara frente a la más barata, entre "
+                    f"{entidades} entidades"
+                ),
+                titular=servicio,
+                inicio=inicio,
+                fin=fin,
+            )
+        with der:
+            st.markdown(f"## {PREGUNTA}")
+            st.markdown(_respuesta(veces, gama, servicio))
+            st.caption(
+                "Cada banco publica lo que cobra por emitir, renovar o reponer una "
+                "tarjeta. Aquí se compara esa tarifa entre entidades, para el mismo "
+                "servicio y la misma gama. El período, la moneda y el cargo se eligen en "
+                "el panel lateral."
+            )
+
+
+def portada_sin_cifra() -> None:
+    """Portada cuando los filtros dejan sin precios que comparar."""
+    with portada:
+        st.markdown(f"## {PREGUNTA}")
+        st.caption("Con los filtros del panel lateral no quedan precios que comparar.")
 
 
 st.caption(
@@ -93,15 +156,9 @@ st.caption(
     "Superintendencia de Bancos. Una sola pregunta, medida y reproducible."
 )
 
-with st.container(border=True):
-    st.markdown("### ¿Cuesta lo mismo el mismo servicio en todos los bancos?")
-    st.markdown(
-        "Cuando un banco emite una tarjeta, la renueva o te repone el plástico que se "
-        "deterioró, **cobra por ello una tarifa que tiene publicada**. Esta página mide "
-        "cuánto varía esa tarifa entre entidades para un servicio idéntico, y cuánto de "
-        "esa variación se explica por la gama de la tarjeta frente a la identidad del "
-        "banco que la cobra."
-    )
+#: Se reserva arriba y se llena cuando ya hay cifras, porque la tarjeta lleva el
+#: hallazgo y éste depende del cargo y la gama que se elijan más abajo.
+portada = st.container(key="portada")
 
 with st.expander(
     "Antes de empezar: qué es cada cosa (para quien no conoce el sistema financiero "
@@ -145,8 +202,19 @@ el banco fijó. Por eso la pregunta admite una respuesta directa.
 
 # ---------------------------------------------------------------- La consulta
 
-with st.container(border=True):
-    st.markdown("**La consulta** — qué período se descarga")
+# Los controles viven en el panel lateral: el área principal queda para el estudio.
+# «Qué se analiza» va primero porque es lo que cada grupo toca, pero se llena después
+# de la descarga, que es la que dice qué cargos hay.
+pantalla = st.sidebar.container()
+panel_analisis = st.sidebar.container()
+
+with st.sidebar:
+    st.subheader(
+        "Período",
+        icon=":material/calendar_month:",
+        help="Con un solo mes, el tarifario es una foto: el precio vigente ese mes. Con "
+        "varios, el precio de cada entidad es la mediana de lo que publicó en ellos.",
+    )
     inicio, fin = ui.period_range_selector(
         key="tarj",
         # Un mes son unos 6 500 registros y medio minuto de descarga: se parte de uno
@@ -154,32 +222,58 @@ with st.container(border=True):
         default_months=1,
         container=st,
         endpoint_id=ENDPOINT,
-    )
-    st.caption(
-        "Con un solo mes, el tarifario es una foto: el precio vigente ese mes. Con "
-        "varios, el precio de cada entidad es la mediana de lo que publicó en ellos."
+        apilado=True,
     )
     inicio, fin = ui.apply_gate(key="tarj", pending=(inicio, fin))
 
-    etiqueta = _etiqueta_periodo(inicio, fin)
-    sufijo = inicio if inicio == fin else f"{inicio}_{fin}"
+etiqueta = _etiqueta_periodo(inicio, fin)
+sufijo = inicio if inicio == fin else f"{inicio}_{fin}"
 
-    # La descarga va antes de los filtros de abajo porque el de tipo de cargo ofrece
-    # sólo los cargos que trae este tarifario.
-    with st.spinner("Descargando el tarifario del período…"):
-        crudo, informe = data.load_safe(ENDPOINT, inicio, fin, filters={})
+# La descarga va antes de los filtros del panel porque el de tipo de cargo ofrece sólo
+# los cargos que trae este tarifario. El aviso de espera sale en el área principal,
+# que es donde se mira mientras tanto.
+with st.spinner("Descargando el tarifario del período…"):
+    crudo, informe = data.load_safe(ENDPOINT, inicio, fin, filters={})
 
-    if crudo.empty:
-        st.warning(
-            f"El API no devolvió tarifas para {etiqueta}. Prueba con otro período.",
-            icon=":material/info:",
-        )
-        ui.source_note()
-        st.stop()
+if crudo.empty:
+    st.warning(
+        f"El API no devolvió tarifas para {etiqueta}. Prueba con otro período.",
+        icon=":material/info:",
+    )
+    ui.source_note()
+    st.stop()
 
-    st.markdown("**Sobre la descarga** — qué parte se analiza")
-    fila = st.container(horizontal=True, vertical_alignment="bottom")
-    tipos = fila.multiselect(
+with panel_analisis:
+    st.subheader(
+        "Qué se analiza",
+        icon=":material/tune:",
+        help="El tarifario completo del período se descarga de una sola vez y queda en "
+        "caché. Cargo, moneda y tipo de entidad trabajan sobre esa descarga: cambian al "
+        "instante y no piden nada nuevo al API.",
+    )
+    opciones_cargo = [None, *cargos_disponibles(crudo)]
+    # La página abre con la variable del grupo; quien quiera puede elegir otra.
+    st.session_state.setdefault("tarj_cargo", CARGO_GRUPO)
+    if st.session_state.get("tarj_cargo") not in opciones_cargo:
+        # Un cargo elegido con otro período puede no existir en éste.
+        st.session_state["tarj_cargo"] = None
+    cargo = st.selectbox(
+        "Tipo de cargo",
+        options=opciones_cargo,
+        format_func=lambda c: "Todos los cargos" if c is None else c,
+        key="tarj_cargo",
+        help="La variable que analiza tu grupo. Al elegir un cargo, toda la página se "
+        "dedica a él: su ficha, cómo cambia con la gama y qué pesa más en su precio.",
+    )
+    moneda = st.segmented_control(
+        "Moneda",
+        options=["DOP", "USD"],
+        default="DOP",
+        required=True,
+        key="tarj_moneda",
+        help="Se compara dentro de una misma moneda; mezclarlas no tendría sentido.",
+    )
+    tipos = st.multiselect(
         "Tipo de entidad",
         # Este conjunto rechaza los códigos de las corporaciones de crédito y de las
         # entidades públicas (HTTP 400): se ofrecen sólo los que acepta.
@@ -189,30 +283,6 @@ with st.container(border=True):
         placeholder="Todos los tipos",
         help="Sólo se ofrecen los tipos que publican tarifarios de tarjeta en este "
         "conjunto de datos.",
-    )
-    moneda = fila.selectbox(
-        "Moneda",
-        options=["DOP", "USD"],
-        key="tarj_moneda",
-        help="Se compara dentro de una misma moneda; mezclarlas no tendría sentido.",
-    )
-    opciones_cargo = [None, *cargos_disponibles(crudo)]
-    if st.session_state.get("tarj_cargo") not in opciones_cargo:
-        # Un cargo elegido con otro período puede no existir en éste.
-        st.session_state["tarj_cargo"] = None
-    cargo = fila.selectbox(
-        "Tipo de cargo",
-        options=opciones_cargo,
-        format_func=lambda c: "Todos los cargos" if c is None else c,
-        key="tarj_cargo",
-        help="La variable que analiza tu grupo. Al elegir un cargo, la página abre con "
-        "su ficha: estadística descriptiva por gama, precio de cada entidad y valores "
-        "atípicos. El resto del estudio queda debajo como contexto del mercado.",
-    )
-    st.caption(
-        "El tarifario completo del período se descarga **de una sola vez** y queda en "
-        "caché. Tipo de entidad, moneda, tipo de cargo y los controles de más abajo "
-        "trabajan sobre esa descarga: cambian al instante y no piden nada nuevo al API."
     )
 
 truncada = ui.truncation_notice(informe)
@@ -241,11 +311,7 @@ marco["valorMaximo"] = pd.to_numeric(marco.get("valorMaximo"), errors="coerce")
 # mínimo–máximo. Se apartan en vez de mezclarlas, y se informa cuántas son.
 es_rango = marco["valorMinimo"].fillna(0) > 0
 rangos = marco[es_rango]
-precios = marco[~es_rango & (marco["valor"] > 0)]
-precios = precios[precios["moneda"] == moneda]
-
-personales = precios[precios["tipoTarjeta"].isin(GAMAS)].copy()
-personales["gama"] = personales["tipoTarjeta"].map(GAMAS)
+personales = precios_personales(marco, moneda)
 
 
 # ------------------------------------------------------- El cargo del grupo
@@ -257,11 +323,29 @@ filas_cargo = pd.DataFrame()
 if cargo:
     seccion(f"El cargo que analiza el grupo: {cargo}")
     filas_cargo = ficha_cargo(personales, cargo)
-    if not filas_cargo.empty:
+    if filas_cargo.empty:
+        portada_sin_cifra()
+    else:
+        # La portada lleva la gama donde el cargo está más disperso.
+        descriptiva = estadistica_por_gama(precio_por_entidad(filas_cargo))
+        mas_dispersa = descriptiva.loc[descriptiva["veces"].idxmax()]
+        periodicidad = str(filas_cargo["periodicidad"].iloc[0])
+        variable = nombre_variable(cargo, periodicidad)
+        llenar_portada(
+            gama=mas_dispersa["gama"],
+            veces=float(mas_dispersa["veces"]),
+            servicio=variable,
+            entidades=int(mas_dispersa["entidades"]),
+            inicio=inicio,
+            fin=fin,
+        )
         seccion("El mismo cargo, el mismo banco: ¿un precio por gama?")
         escalera_por_gama(filas_cargo)
         seccion("¿Qué pesa más en el precio: la gama o el banco?")
         gama_o_banco(filas_cargo)
+        seccion("La línea de tiempo: ¿ha cambiado este precio?")
+        # Se llena al final, para que su descarga no retenga el resto de la página.
+        espacio_linea = st.container()
 else:
     # -------------------------------------------------------------- El hallazgo
 
@@ -271,8 +355,10 @@ else:
         "Gama de tarjeta",
         options=ORDEN_GAMAS,
         default="Clásica",
+        required=True,
         key="tarj_gama",
-        help="Se compara dentro de una gama para que el producto sea equivalente.",
+        help="Se compara dentro de una gama para que el producto sea equivalente. La "
+        "tarjeta de la portada cambia con ella.",
     )
     gama_elegida = gama_elegida or "Clásica"
     sub = personales[personales["gama"] == gama_elegida]
@@ -281,12 +367,21 @@ else:
     resumen = resumen[resumen["entidades"] >= minimo]
 
     if resumen.empty:
+        portada_sin_cifra()
         st.info(
             "No hay conceptos con suficientes entidades para comparar en esta gama. "
             "Prueba con otra gama, otra moneda o un filtro de tipo de entidad más amplio."
         )
     else:
         peor = resumen.iloc[0]
+        llenar_portada(
+            gama=gama_elegida,
+            veces=float(peor["veces"]),
+            servicio=peor["concepto"],
+            entidades=int(peor["entidades"]),
+            inicio=inicio,
+            fin=fin,
+        )
         ui.kpi_row(
             [
                 {
@@ -331,7 +426,7 @@ else:
             hide_index=True,
             column_config={
                 "Mediana": st.column_config.NumberColumn("Mediana", format="localized"),
-                "Veces": st.column_config.NumberColumn("Veces", format="%.1f ×"),
+                "Veces": ui.columna_veces("Veces", tabla["veces"].max()),
             },
             height=380,
         )
@@ -342,7 +437,7 @@ else:
             )
             grafico = (
                 alt.Chart(tabla.head(14))
-                .mark_bar(cornerRadiusEnd=4, color=ui.SERIE_PRINCIPAL)
+                .mark_bar(cornerRadiusEnd=4, color=ui.COLORES_GAMA[gama_elegida])
                 .encode(
                     x=alt.X("veces:Q", title="Veces que el más caro supera al más barato"),
                     y=alt.Y("servicio:N", sort="-x", title=None),
@@ -430,22 +525,7 @@ else:
                 largo = ancho.drop(columns="Multiplica").reset_index().melt(
                     id_vars="entidad", var_name="gama", value_name="precio"
                 )
-                lineas = (
-                    alt.Chart(largo)
-                    .mark_line(point=alt.OverlayMarkDef(size=70), strokeWidth=2)
-                    .encode(
-                        x=alt.X("gama:N", sort=ORDEN_GAMAS, title=None),
-                        y=alt.Y("precio:Q", title=f"Precio ({moneda})"),
-                        color=alt.Color("entidad:N", title="Entidad"),
-                        tooltip=[
-                            alt.Tooltip("entidad:N", title="Entidad"),
-                            alt.Tooltip("gama:N", title="Gama"),
-                            alt.Tooltip("precio:Q", title="Precio", format=",.0f"),
-                        ],
-                    )
-                    .properties(height=420)
-                )
-                st.altair_chart(lineas, width="stretch")
+                grafico_escalera(largo, f"Precio ({moneda})", ",.0f")
             with der, st.container(border=True):
                 st.markdown("**Cuánto multiplica cada banco**")
                 st.dataframe(
@@ -457,7 +537,7 @@ else:
                             for c in ORDEN_GAMAS
                             if c in ancho.columns
                         },
-                        "Multiplica": st.column_config.NumberColumn("Multiplica", format="%.1f ×"),
+                        "Multiplica": ui.columna_veces("Multiplica", ancho["Multiplica"].max()),
                     },
                     height=420,
                 )
@@ -636,6 +716,18 @@ else:
 
 # --------------------------------------------------------- Rastro de consultas
 
+with pantalla:
+    pantalla_terminal(
+        titulo=variable if not filas_cargo.empty else (cargo or "Todos los cargos"),
+        filas={
+            "Moneda": moneda,
+            "Tarifario": etiqueta,
+            "Entidades": str(
+                filas_cargo["entidad"].nunique() if not filas_cargo.empty else marco["entidad"].nunique()
+            ),
+        },
+    )
+
 seccion("El rastro: de dónde sale cada cifra")
 
 st.markdown(
@@ -722,7 +814,9 @@ with st.expander("Qué se hizo con esos datos antes de calcular", icon=":materia
     )
     if not filas_cargo.empty:
         pasos_limpieza.append(
-            f"**Se acotó al cargo «{cargo}»** en {filas_cargo['unidadValor'].iloc[0]}: "
+            f"**Se acotó al cargo «{cargo}»** con periodicidad "
+            f"{str(filas_cargo['periodicidad'].iloc[0]).lower()}, en "
+            f"{filas_cargo['unidadValor'].iloc[0]}: "
             f"{len(filas_cargo):,} registros de {filas_cargo['entidad'].nunique()} "
             "entidades. Ninguna sección de la página usa los demás cargos."
         )
@@ -809,9 +903,9 @@ afecta a las comparaciones entre bancos, porque todos usan la misma unidad.
 
 st.markdown(
     """
-**Mide un nivel, no una evolución.** Con un mes es la foto del tarifario vigente; con
-varios, el precio típico de cada entidad en ese período. Si la dispersión se ha abierto
-o cerrado con los años es otra pregunta, que exigiría seguirla mes a mes.
+**Son precios nominales.** Con un mes es la foto del tarifario vigente; con varios, el
+precio típico de cada entidad en ese período. Al comparar períodos, un precio igual puede
+ser más barato en términos reales: no se descuenta la inflación.
 
 **No explica por qué.** Mide cuánto varía el precio y con qué está asociado. No dice
 si la causa es el costo, el poder de mercado o la estrategia comercial: eso requeriría
@@ -824,3 +918,13 @@ otro, o ofrecer ventajas que el tarifario no recoge.
 
 ui.diagnostics(informe, endpoint_id=ENDPOINT, truncation_shown=truncada)
 ui.source_note()
+
+if not filas_cargo.empty:
+    with espacio_linea:
+        linea_de_tiempo(
+            cargo=cargo,
+            periodicidad=periodicidad,
+            unidad=str(filas_cargo["unidadValor"].iloc[0]),
+            moneda=moneda,
+            tipos=tipos,
+        )

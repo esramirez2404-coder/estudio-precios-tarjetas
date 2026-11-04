@@ -45,9 +45,10 @@ el análisis del cargo que le toca a cada grupo:
 8. Filtros de búsqueda de tarjetas de crédito
 9. Análisis del cargo del grupo
 10. ¿Qué explica el precio: la gama o el banco?
-11. Verificación contra la app
-12. Exportar y reproducir
-13. Resumen para la presentación
+11. La línea de tiempo: comparar dos períodos
+12. Verificación contra la app
+13. Exportar y reproducir
+14. Resumen para la presentación
 
 Desde la sección 9 todo el análisis es **sólo del cargo elegido**, igual que la página de
 la app cuando se elige un cargo: ningún otro servicio entra en las cifras.
@@ -88,6 +89,9 @@ print("pandas", pd.__version__, "| requests", requests.__version__)
 code("""
 # ===== Parámetros del análisis: cámbialos y vuelve a ejecutar todo =====
 CARGO = "Cargo por Renovación"   # la variable que analiza el grupo (campo `concepto`)
+PERIODICIDAD = "ANUAL"            # el campo `periodicidad`; None = la más frecuente del cargo
+PERIODO_A = (2025, "T1")          # primer período que se compara en la sección 11
+PERIODO_B = (2026, "T1")          # segundo período
 MONEDA = "DOP"                    # "DOP" o "USD"
 TIPOS_ENTIDAD = []                # [] = todos; p. ej. ["BM"] = sólo bancos múltiples
 PERIODO = None                    # None = el último mes publicado; o un mes, "2026-05"
@@ -437,6 +441,13 @@ code("""
 del_cargo = personales[personales["concepto"] == CARGO]
 embudo.append((f"Cargo: {CARGO}", len(del_cargo)))
 
+# Cobrar 1,500 al año no es cobrar 1,500 al mes: cada periodicidad se analiza por separado.
+periodicidades = del_cargo["periodicidad"].value_counts()
+print("Periodicidades publicadas:", periodicidades.to_dict())
+PERIODICIDAD = PERIODICIDAD or periodicidades.index[0]
+del_cargo = del_cargo[del_cargo["periodicidad"] == PERIODICIDAD]
+embudo.append((f"Periodicidad: {PERIODICIDAD}", len(del_cargo)))
+
 unidades = del_cargo["unidadValor"].value_counts()
 UNIDAD = unidades.index[0]   # la más frecuente, como en la app
 if len(unidades) > 1:
@@ -486,14 +497,14 @@ descriptiva = por_entidad.groupby("gama")["valor"].describe()
 descriptiva["cv_%"] = descriptiva["std"] / descriptiva["mean"] * 100
 descriptiva["veces"] = descriptiva["max"] / descriptiva["min"]
 descriptiva = descriptiva.reindex([g for g in ORDEN_GAMAS if g in descriptiva.index])
+gamas = list(descriptiva.index)   # las gamas con datos, en orden; la usan 9.3, 9.4 y 9.6
 descriptiva
 """)
 
 md("### 9.3 Distribución: diagrama de caja con un punto por entidad")
 
 code("""
-gamas = list(descriptiva.index)
-grupos = [por_entidad.loc[por_entidad["gama"] == g, "valor"] for g in gamas]
+grupos =[por_entidad.loc[por_entidad["gama"] == g, "valor"] for g in gamas]
 azar = np.random.default_rng(0)
 
 fig, ax = plt.subplots(figsize=(10, 5.5))
@@ -611,7 +622,158 @@ display(descomposicion)
 """)
 
 md("""
-## 11. Verificación contra la app
+## 11. La línea de tiempo: comparar dos períodos
+
+Hasta aquí todo era la foto de un mes. Ahora se sigue la misma variable en el tiempo para
+responder: **¿cambió su precio entre `PERIODO_A` y `PERIODO_B`?**
+
+El API no deja filtrar por cargo, así que hay que descargar el tarifario completo de cada
+mes (unos 40 segundos cada uno). `simbad/historial.py`, el mismo módulo que usa la app, los
+pide en paralelo y guarda cada mes en `.cache/tarifario/`, para no volver a pedirlo.
+
+### 11.1 Descargar los meses
+""")
+
+code("""
+from simbad.estudio_tarjetas import meses_de_la_linea, meses_del_trimestre
+from simbad.historial import descargar_meses
+
+meses_a = [m for m in meses_del_trimestre(*PERIODO_A) if m <= ultimo]
+meses_b = [m for m in meses_del_trimestre(*PERIODO_B) if m <= ultimo]
+nombre_a, nombre_b = f"{PERIODO_A[1]} {PERIODO_A[0]}", f"{PERIODO_B[1]} {PERIODO_B[0]}"
+meses_linea = meses_de_la_linea(meses_a[0], meses_b[-1], meses_a + meses_b)
+
+inicio = time.perf_counter()
+historia, fallidos = descargar_meses(API_KEY, meses_linea)
+assert not fallidos, f"No se pudieron descargar: {fallidos}. Vuelve a ejecutar esta celda."
+print(f"{len(meses_linea)} meses, {len(historia):,} registros, {time.perf_counter() - inicio:.1f} s")
+""")
+
+md("""
+### 11.2 La misma variable, con los mismos filtros
+
+Son los filtros de la sección 8, ahora escritos sobre todos los meses.
+""")
+
+code("""
+del_cargo_t = historia.assign(
+    valor=pd.to_numeric(historia["valor"], errors="coerce"),
+    valorMinimo=pd.to_numeric(historia["valorMinimo"], errors="coerce").fillna(0),
+    mes=historia["periodo"].astype(str).str[:7],
+)
+del_cargo_t = del_cargo_t[
+    (del_cargo_t["valorMinimo"] <= 0)
+    & (del_cargo_t["valor"] > 0)
+    & (del_cargo_t["moneda"] == MONEDA)
+    & (del_cargo_t["tipoTarjeta"].isin(GAMAS))
+    & (del_cargo_t["concepto"] == CARGO)
+    & (del_cargo_t["periodicidad"] == PERIODICIDAD)
+    & (del_cargo_t["unidadValor"] == UNIDAD)
+].assign(gama=lambda d: d["tipoTarjeta"].map(GAMAS))
+if TIPOS_ENTIDAD:
+    del_cargo_t = del_cargo_t[del_cargo_t["tipoEntidad"].map(CODIGOS).isin(TIPOS_ENTIDAD)]
+
+print(f"{len(del_cargo_t):,} registros de {del_cargo_t['entidad'].nunique()} entidades")
+""")
+
+md("""
+### 11.3 El precio mediano, mes a mes
+
+Una observación por entidad, gama y mes, como en la sección 9. Después, la mediana y los
+cuartiles entre entidades.
+""")
+
+code("""
+por_mes = del_cargo_t.groupby(["mes", "gama", "entidad"])["valor"].median().reset_index()
+serie = (
+    por_mes.groupby(["mes", "gama"])["valor"]
+    .agg(entidades="count", q1=lambda v: v.quantile(0.25), mediana="median", q3=lambda v: v.quantile(0.75))
+    .reset_index()
+)
+COLORES = {"Clásica": "#0B6BE0", "Oro": "#C9920F", "Platino": "#5B6B85"}
+
+fig, ax = plt.subplots(figsize=(11, 5.5))
+posicion = {m: i for i, m in enumerate(meses_linea)}
+for gama, trozo in serie.groupby("gama"):
+    x = trozo["mes"].map(posicion)
+    ax.plot(x, trozo["mediana"], marker="o", color=COLORES[gama], label=gama)
+    ax.fill_between(x, trozo["q1"], trozo["q3"], color=COLORES[gama], alpha=0.12)
+ax.axvspan(posicion[meses_a[0]] - 0.4, posicion[meses_a[-1]] + 0.4, color="#FF2E93", alpha=0.12, label=nombre_a)
+ax.axvspan(posicion[meses_b[0]] - 0.4, posicion[meses_b[-1]] + 0.4, color="#00A7C4", alpha=0.15, label=nombre_b)
+ax.set_yscale("log")
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+ax.set_xticks(range(len(meses_linea)), meses_linea, rotation=45, ha="right")
+ax.set_ylabel(f"Precio mediano ({UNIDAD}), escala logarítmica")
+ax.set_title(f"{CARGO} ({PERIODICIDAD.lower()}): mediana y rango intercuartílico por gama")
+ax.legend()
+plt.tight_layout()
+plt.show()
+""")
+
+md("""
+### 11.4 Comparar los dos períodos
+
+El precio de una entidad en un período es la mediana de lo que publicó en él. Sólo entran
+las entidades que publicaron **en los dos**: si un banco caro entra a mitad de camino, la
+mediana subiría sin que nadie hubiese cambiado de precio. Eso es un *efecto de composición*.
+""")
+
+code("""
+claves = ["gama", "entidad"]
+comparacion = pd.concat(
+    {
+        "precio_a": del_cargo_t[del_cargo_t["mes"].isin(meses_a)].groupby(claves)["valor"].median(),
+        "precio_b": del_cargo_t[del_cargo_t["mes"].isin(meses_b)].groupby(claves)["valor"].median(),
+    },
+    axis=1,
+).dropna()
+comparacion["cambio"] = comparacion["precio_b"] - comparacion["precio_a"]
+comparacion["cambio_pct"] = (comparacion["precio_b"] / comparacion["precio_a"] - 1) * 100
+comparacion = comparacion.reset_index().sort_values("cambio_pct", ascending=False, ignore_index=True)
+
+por_periodo = comparacion.groupby("gama").agg(
+    entidades=("entidad", "count"),
+    mediana_a=("precio_a", "median"),
+    mediana_b=("precio_b", "median"),
+    suben=("cambio", lambda c: (c > 0).sum()),
+    bajan=("cambio", lambda c: (c < 0).sum()),
+    iguales=("cambio", lambda c: (c == 0).sum()),
+    veces_a=("precio_a", lambda p: p.max() / p.min()),
+    veces_b=("precio_b", lambda p: p.max() / p.min()),
+).reindex([g for g in ORDEN_GAMAS if g in set(comparacion["gama"])])
+por_periodo["variacion_pct"] = (por_periodo["mediana_b"] / por_periodo["mediana_a"] - 1) * 100
+display(por_periodo.round(2))
+display(comparacion.head(10).round(2))
+""")
+
+code("""
+gamas_t = list(por_periodo.index)
+fig, ejes = plt.subplots(1, len(gamas_t), figsize=(13, 7), sharex=True)
+for ax, gama in zip(np.atleast_1d(ejes), gamas_t):
+    trozo = comparacion[comparacion["gama"] == gama].sort_values("cambio_pct")
+    y = range(len(trozo))
+    ax.hlines(y, trozo["precio_a"], trozo["precio_b"], color="#9AA5B5")
+    ax.scatter(trozo["precio_a"], y, color="#FF2E93", label=nombre_a, zorder=3)
+    ax.scatter(trozo["precio_b"], y, color="#00A7C4", label=nombre_b, zorder=3)
+    ax.set_yticks(list(y), trozo["entidad"], fontsize=8)
+    ax.set_xscale("log")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+    ax.set_title(gama)
+    ax.set_xlabel(f"Precio ({UNIDAD})")
+np.atleast_1d(ejes)[0].legend(loc="lower right")
+fig.suptitle(f"Cada entidad en {nombre_a} y en {nombre_b}")
+plt.tight_layout()
+plt.show()
+""")
+
+md("""
+**Cómo se lee:** cada tramo une los dos precios de una entidad; si los puntos coinciden, no
+cambió. Son precios **nominales**: un precio igual puede ser más barato en términos reales,
+porque aquí no se descuenta la inflación.
+""")
+
+md("""
+## 12. Verificación contra la app
 
 La app usa las funciones de `simbad/estudio_tarjetas.py` y el cliente `simbad/client.py`.
 Aquí se comprueba que el código escrito a mano en este notebook da **exactamente** las
@@ -635,17 +797,31 @@ assert abs(estudio.explica(datos, ["gama"]) - r2_gama) < 1e-12
 assert abs(estudio.explica(datos, ["gama", "entidad"]) - r2_ambos) < 1e-12
 assert set(estudio.atipicos(por_entidad)["entidad"]) == set(atipicos["entidad"])
 
+serie_app = estudio.serie_mensual(del_cargo_t)
+np.testing.assert_allclose(serie_app[["q1", "mediana", "q3"]].to_numpy(), serie[["q1", "mediana", "q3"]].to_numpy())
+tabla_app = estudio.comparar_periodos(del_cargo_t, meses_a, meses_b)
+clave = ["gama", "entidad"]
+np.testing.assert_allclose(
+    tabla_app.sort_values(clave)[["precio_a", "precio_b", "cambio_pct"]].to_numpy(),
+    comparacion.sort_values(clave)[["precio_a", "precio_b", "cambio_pct"]].to_numpy(),
+)
+resumen_app = estudio.resumen_comparacion(tabla_app).set_index("gama")
+np.testing.assert_allclose(
+    resumen_app[["mediana_a", "mediana_b", "variacion_pct", "veces_a", "veces_b"]].to_numpy(),
+    por_periodo[["mediana_a", "mediana_b", "variacion_pct", "veces_a", "veces_b"]].to_numpy(),
+)
+
 cliente = SimbadClient(API_KEY)
 filas, informe = cliente.fetch_raw(
     "TasasComisionesTarjetasCredito", PERIODO, PERIODO, filters={"tipoEntidad": TIPOS_ACEPTADOS}, page_size=20000
 )
 assert len(filas) == len(crudo.drop_duplicates())
 
-print("OK: precio por entidad, estadística descriptiva, descomposición y atípicos coinciden con la app.")
+print("OK: precio por entidad, estadística descriptiva, descomposición, atípicos y línea de tiempo coinciden con la app.")
 print(f"OK: el cliente de la app descarga los mismos {len(filas):,} registros únicos.")
 """)
 
-md("## 12. Exportar y reproducir")
+md("## 13. Exportar y reproducir")
 
 code("""
 salidas = RAIZ / "notebooks" / "salidas"
@@ -655,6 +831,8 @@ nombre = "".join(c if c.isalnum() else "_" for c in CARGO)[:40] + f"_{PERIODO}_{
 del_cargo.to_csv(salidas / f"{nombre}_registros.csv", index=False, encoding="utf-8-sig")
 por_entidad.to_csv(salidas / f"{nombre}_por_entidad.csv", index=False, encoding="utf-8-sig")
 descriptiva.to_csv(salidas / f"{nombre}_descriptiva.csv", encoding="utf-8-sig")
+serie.to_csv(salidas / f"{nombre}_serie_mensual.csv", index=False, encoding="utf-8-sig")
+comparacion.to_csv(salidas / f"{nombre}_comparacion_periodos.csv", index=False, encoding="utf-8-sig")
 print("Guardado en notebooks/salidas/:", *sorted(p.name for p in salidas.glob(f"{nombre}*")), sep="\\n  ")
 """)
 
@@ -664,7 +842,7 @@ print("La misma consulta desde una terminal (sustituye TU_CLAVE por la tuya):\\n
 print(f'curl -H "Ocp-Apim-Subscription-Key: TU_CLAVE" "{url}"')
 """)
 
-md("## 13. Resumen para la presentación")
+md("## 14. Resumen para la presentación")
 
 md("""
 Las medidas de dispersión se dan **dentro de cada gama**: comparar una clásica barata con
@@ -673,7 +851,11 @@ una platino cara mediría la gama, no al banco.
 
 code("""
 por_gama = lambda columna, formato: ", ".join(f"{g.lower()} {v:{formato}}" for g, v in descriptiva[columna].items())
-print(f\"\"\"Cargo analizado: {CARGO} ({UNIDAD}), {PERIODO}, moneda {MONEDA}.
+cambios = "; ".join(
+    f"{f.Index.lower()} {f.variacion_pct:+.1f} % ({f.suben} suben, {f.bajan} bajan, {f.iguales} igual)"
+    for f in por_periodo.itertuples()
+)
+print(f\"\"\"Cargo analizado: {CARGO} ({PERIODICIDAD.lower()}, {UNIDAD}), {PERIODO}, moneda {MONEDA}.
 
 - Lo publican {por_entidad['entidad'].nunique()} entidades en tarjetas personales.
 - Precio mediano por gama ({UNIDAD}): {por_gama('50%', ',.2f')}.
@@ -681,6 +863,7 @@ print(f\"\"\"Cargo analizado: {CARGO} ({UNIDAD}), {PERIODO}, moneda {MONEDA}.
 - Coeficiente de variación por gama (%): {por_gama('cv_%', '.1f')}.
 - Dentro de la misma entidad, la gama más cara cuesta {escalera['multiplica'].median():.1f} veces la más barata (mediana de {len(escalera)} entidades).
 - La gama explica {r2_gama * 100:.1f} % de la variación del precio; saber el banco añade {(r2_ambos - r2_gama) * 100:.1f} %.
+- De {nombre_a} a {nombre_b}, la mediana cambia así: {cambios}.
 - Valores atípicos (Tukey): {len(atipicos)}{': ' + ', '.join(atipicos['entidad'] + ' (' + atipicos['gama'] + ')') if len(atipicos) else ''}.\"\"\")
 """)
 
@@ -688,7 +871,11 @@ md("""
 **Limitaciones que conviene decir en la presentación:**
 
 - Es **precio de lista** (lo que la entidad publica), no lo que pagó un cliente concreto.
-- Es una **foto de un mes**; no dice si la dispersión crece o se reduce con el tiempo.
+- Las secciones 9 y 10 son la **foto de un mes**, y una entidad nueva puede moverla: LA
+  NACIONAL entra en platino en abril de 2026 con dos productos (16,000 y 32,000), y por eso
+  la mayor diferencia salta de 5.7 a 17.1 veces. La sección 11 sólo compara entidades
+  presentes en ambos períodos.
+- Los precios son **nominales**: la comparación entre períodos no descuenta la inflación.
 - La descomposición de la varianza es **descriptiva**: mide asociación, no causa.
 - Un banco caro en este cargo puede ser barato en otro: no es una recomendación.
 """)
