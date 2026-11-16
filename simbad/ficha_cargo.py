@@ -17,6 +17,7 @@ import streamlit as st
 
 from simbad import ui
 from simbad.estudio_tarjetas import (
+    GAMAS_ESCALERA,
     ORDEN_GAMAS,
     atipicos,
     estadistica_por_gama,
@@ -109,13 +110,13 @@ def _resumen_cargo(
             {
                 "label": "Entidades que lo publican",
                 "value": f"{por_entidad['entidad'].nunique()}",
-                "help": "En alguna de las tres gamas personales, con la moneda y los "
-                "tipos de entidad elegidos.",
+                "help": "En alguna de las gamas personales, con la moneda y los tipos de "
+                "entidad elegidos.",
             },
             {
                 "label": "Precio mediano",
                 "value": _con_unidad(por_entidad["valor"].median(), unidad),
-                "help": "Mediana del precio de cada entidad en cada gama, con las tres "
+                "help": "Mediana del precio de cada entidad en cada gama, con todas las "
                 "gamas juntas. La tabla de abajo lo da gama por gama.",
             },
             {
@@ -318,11 +319,12 @@ def escalera_por_gama(filas: pd.DataFrame) -> None:
 
     Es la misma comparación que el estudio general hace con el reemplazo del plástico:
     fijada la entidad, ¿cuánto sube el precio al pasar de clásica a platino? Sólo
-    entran las entidades que publican el cargo en todas las gamas presentes.
+    entran las entidades que publican el cargo en todas esas gamas; Superior queda
+    fuera porque muchas no la tienen.
     """
     unidad = filas["unidadValor"].iloc[0]
     ancho = precio_por_entidad(filas).pivot_table(index="entidad", columns="gama", values="valor")
-    gamas = [g for g in ORDEN_GAMAS if g in ancho.columns]
+    gamas = [g for g in GAMAS_ESCALERA if g in ancho.columns]
     ancho = ancho[gamas].dropna()
     if len(gamas) < 2 or ancho.empty:
         st.info(
@@ -336,7 +338,7 @@ def escalera_por_gama(filas: pd.DataFrame) -> None:
 
     st.markdown(
         f"Las **{len(ancho)} entidades** que publican el cargo en "
-        f"{'las tres gamas' if len(gamas) == 3 else 'todas las gamas presentes'}. Cada "
+        f"{'clásica, oro y platino' if len(gamas) == 3 else 'todas las gamas presentes'}. Cada "
         "línea es una entidad: si el precio dependiera sólo del servicio, serían planas."
     )
     izq, der = st.columns([3, 2])

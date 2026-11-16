@@ -14,14 +14,15 @@ from html import escape
 
 import streamlit as st
 
-#: Metal de cada gama: tres paradas del degradado y la tinta del grabado. Clásica es
-#: oscura con tinta clara; oro y platino son claros con tinta oscura. Así el texto
-#: conserva el contraste en toda la superficie de la tarjeta.
+#: Metal de cada gama: tres paradas del degradado y la tinta del grabado. Clásica y
+#: Superior (la tarjeta negra) son oscuras con tinta clara; oro y platino son claros con
+#: tinta oscura. Así el texto conserva el contraste en toda la superficie de la tarjeta.
 TINTA_CLARA = "#FFFFFF"
 METALES = {
     "Clásica": ("#0B2FA8", "#0B6BE0", "#0A8FD6", TINTA_CLARA),
     "Oro": ("#FFE27A", "#F2BE2C", "#C9920F", "#2A1C00"),
     "Platino": ("#FFFFFF", "#D5DCE8", "#A4AFC2", "#121A2B"),
+    "Superior": ("#34343F", "#1A1A22", "#08080C", TINTA_CLARA),
 }
 
 _ESTILO = """

@@ -28,6 +28,8 @@ from simbad import data, ui
 from simbad.catalog import BASE_URL, ENDPOINTS, TIPOS_ENTIDAD
 from simbad.estudio_tarjetas import (
     CARGO_GRUPO,
+    FUENTE_VIGENCIA,
+    GAMAS_ESCALERA,
     MINIMO_ENTIDADES,
     ORDEN_GAMAS,
     cargos_disponibles,
@@ -139,8 +141,8 @@ def llenar_portada(
             st.caption(
                 "Cada banco publica lo que cobra por emitir, renovar o reponer una "
                 "tarjeta. Aquí se compara esa tarifa entre entidades, para el mismo "
-                "servicio y la misma gama. El período, la moneda y el cargo se eligen en "
-                "el panel lateral."
+                "servicio y la misma gama, con el precio de la tarjeta principal. El "
+                "período, la moneda y el cargo se eligen en el panel lateral."
             )
 
 
@@ -302,15 +304,6 @@ if tipos:
         )
         ui.source_note()
         st.stop()
-marco["valor"] = pd.to_numeric(marco["valor"], errors="coerce")
-marco["valorMinimo"] = pd.to_numeric(marco.get("valorMinimo"), errors="coerce")
-marco["valorMaximo"] = pd.to_numeric(marco.get("valorMaximo"), errors="coerce")
-
-# Un 3 % de las filas no declaran un precio único sino un rango (formatoTarifa =
-# "Escala de valores fijos"): ahí `valor` viene en cero y el precio real está en
-# mínimo–máximo. Se apartan en vez de mezclarlas, y se informa cuántas son.
-es_rango = marco["valorMinimo"].fillna(0) > 0
-rangos = marco[es_rango]
 personales = precios_personales(marco, moneda)
 
 
@@ -330,6 +323,15 @@ if cargo:
         descriptiva = estadistica_por_gama(precio_por_entidad(filas_cargo))
         mas_dispersa = descriptiva.loc[descriptiva["veces"].idxmax()]
         periodicidad = str(filas_cargo["periodicidad"].iloc[0])
+        if filas_cargo["corregido"].any():
+            st.info(
+                "**Precios de LA NACIONAL corregidos a su valor anual.** Su tarjeta tiene una "
+                "vigencia de 4 años y, antes de julio de 2026, el API trae el total y no el cargo "
+                "anual: se divide entre 4, y entre 16 en platino. Es una deducción "
+                f"a partir del [tarifario de la entidad]({FUENTE_VIGENCIA}) y del panel del "
+                "SIMBAD, pendiente de confirmar con soporte del API.",
+                icon=":material/edit_note:",
+            )
         variable = nombre_variable(cargo, periodicidad)
         llenar_portada(
             gama=mas_dispersa["gama"],
@@ -513,7 +515,7 @@ else:
             plastico.groupby(["entidad", "gama"])["valor"].median().reset_index()
         )
         ancho = tabla_p.pivot(index="entidad", columns="gama", values="valor")
-        ancho = ancho[[c for c in ORDEN_GAMAS if c in ancho.columns]].dropna()
+        ancho = ancho[[c for c in GAMAS_ESCALERA if c in ancho.columns]].dropna()
         if not ancho.empty:
             ancho["Multiplica"] = ancho.max(axis=1) / ancho.min(axis=1)
             ancho = ancho.sort_values("Multiplica", ascending=False)
@@ -794,23 +796,38 @@ with st.expander("Qué se hizo con esos datos antes de calcular", icon=":materia
             f"entidad ({len(crudo):,} registros); el filtro se aplicó después y dejó "
             f"{len(marco):,}. Así el rastro de arriba sigue siendo la consulta completa."
         )
-    # Con un cargo elegido, las cuentas y la tabla de filas apartadas son sólo de ese cargo.
+    # Con un cargo elegido, la cuenta de filas con rango es sólo de ese cargo.
     ambito = marco[marco["concepto"] == cargo] if cargo else marco
-    apartadas = rangos[rangos["concepto"] == cargo] if cargo else rangos
+    con_rango = int((pd.to_numeric(ambito["valorMaximo"], errors="coerce").fillna(0) > 0).sum())
     pasos_limpieza.append(
-        f"**Se apartaron las filas que no declaran un precio único.** {len(apartadas):,} de "
-        f"{len(ambito):,} registros{' de este cargo' if cargo else ''} "
-        f"({len(apartadas) / max(len(ambito), 1) * 100:.1f} %) usan "
-        '`formatoTarifa = "Escala de valores fijos"`: su campo `valor` viene en cero y el '
-        "precio se expresa como un rango mínimo–máximo. Se excluyen en vez de mezclarlas."
+        "**Se usa sólo el precio de la tarjeta principal.** Un mismo producto suele traer dos "
+        "filas, una el doble de la otra y sin columna que las distinga. Se toma la mayor, que "
+        "es la que publica el SIMBAD y la que encaja con la principal: en la emisión, que sí "
+        "viene separada, la adicional cuesta la mitad. «Emisión de Adicional» no se analiza."
+    )
+    pasos_limpieza.append(
+        "**Se corrigieron los precios de LA NACIONAL antes de julio de 2026.** En renovación y "
+        "emisión principal, el API trae el total de 4 años (marcado anual en renovación y por "
+        "adelantado en emisión). En emisión, la cifra queda como equivalente anual, igual que "
+        "en el panel desde julio, y no como el pago inicial. Se "
+        f"divide entre 4, y entre 16 en platino, según el [tarifario de la entidad]({FUENTE_VIGENCIA}). "
+        "Es el único dato de esta página que no sale tal cual del API."
+    )
+    pasos_limpieza.append(
+        f"**En los rangos se toma el extremo superior.** {con_rango:,} de {len(ambito):,} "
+        f"registros{' de este cargo' if cargo else ''} usan "
+        '`formatoTarifa = "Escala de valores fijos"`: su `valor` viene en cero y el precio '
+        "se expresa como mínimo–máximo. El SIMBAD publica el máximo."
     )
     pasos_limpieza.append(
         f"**Se fijó la moneda en {moneda}.** Comparar un cargo en pesos con uno en dólares "
         "no mediría precios, mediría el tipo de cambio."
     )
     pasos_limpieza.append(
-        "**Se restringió a las tres gamas personales** (clásica, oro, platino), dejando "
-        "fuera corporativas, empresariales y de flotilla, que no son comparables con ellas."
+        "**Se restringió a las gamas personales** (clásica, oro, platino y superior), "
+        "dejando fuera corporativas, empresariales y de flotilla, que no son comparables. "
+        "El API junta platino y superior; se separan como el SIMBAD, por el nombre del "
+        "producto (Infinite, Black, Signature y similares)."
     )
     if not filas_cargo.empty:
         pasos_limpieza.append(
@@ -842,14 +859,6 @@ with st.expander("Qué se hizo con esos datos antes de calcular", icon=":materia
             f"menos de dos (en la gama {gama_elegida.lower()} de esta consulta: {minimo})."
         )
     st.markdown("\n".join(f"{n}. {paso}" for n, paso in enumerate(pasos_limpieza, 1)))
-    if not apartadas.empty:
-        st.markdown("**Las filas apartadas, para que consten:**")
-        ui.dataframe(
-            apartadas[
-                ["entidad", "concepto", "tipoTarjeta", "valorMinimo", "valorMaximo", "unidadValor"]
-            ].head(50),
-            height=240,
-        )
 
 st.markdown("**Descargar los datos de esta página**")
 if cargo:
@@ -906,6 +915,17 @@ st.markdown(
 **Son precios nominales.** Con un mes es la foto del tarifario vigente; con varios, el
 precio típico de cada entidad en ese período. Al comparar períodos, un precio igual puede
 ser más barato en términos reales: no se descuenta la inflación.
+
+**Se alinea con el SIMBAD, pero no en todo.** En renovación, emisión principal y seguro el
+método reproduce más del 90 % de los precios del panel público; en avance de efectivo e
+interés por financiamiento no. La separación entre platino y superior se hace por el nombre
+del producto, porque el API no trae ese dato. Y el API llega a mayo de 2026, mientras el
+panel ya va por septiembre.
+
+**LA NACIONAL está corregida a mano.** Antes de julio de 2026, el API y el panel traen el total
+de 4 años de su renovación y emisión (32,000 en platino); aquí se usa el valor anual (2,000). Es
+una deducción a partir de su tarifario, aún sin confirmar. Otras entidades podrían reportar
+también totales de varios años: eso no se ha revisado.
 
 **No explica por qué.** Mide cuánto varía el precio y con qué está asociado. No dice
 si la causa es el costo, el poder de mercado o la estrategia comercial: eso requeriría

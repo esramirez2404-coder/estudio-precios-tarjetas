@@ -360,7 +360,8 @@ md("""
 1. Valores numéricos como números y textos sin espacios sobrantes.
 2. **Escalas de valores fijos:** algunas filas no declaran un precio único sino un rango
    (`formatoTarifa = "Escala de valores fijos"`): su `valor` viene en cero y el precio está
-   en `valorMinimo`–`valorMaximo`. Se apartan en vez de mezclarlas.
+   en `valorMinimo`–`valorMaximo`. Se toma el **extremo superior**, que es lo que publica el
+   panel del SIMBAD.
 3. Se descartan las filas con precio cero.
 """)
 
@@ -371,13 +372,14 @@ tarifario[["valor", "valorMinimo", "valorMaximo"]] = tarifario[["valor", "valorM
 for columna in ["tipoEntidad", "entidad", "tipoTarjeta", "concepto", "unidadValor", "moneda"]:
     tarifario[columna] = tarifario[columna].astype(str).str.strip()
 
-es_rango = tarifario["valorMinimo"].fillna(0) > 0
+es_rango = tarifario["valorMaximo"].fillna(0) > 0
 rangos = tarifario[es_rango]
-precios = tarifario[~es_rango & (tarifario["valor"] > 0)]
+tarifario["valor"] = tarifario[["valor", "valorMaximo"]].fillna(0).max(axis=1)
+precios = tarifario[tarifario["valor"] > 0]
 
-print(f"Filas con escala de valores (apartadas): {len(rangos):,} ({len(rangos) / len(tarifario):.1%})")
-print(f"Filas con precio cero (descartadas):     {(~es_rango & (tarifario['valor'] <= 0)).sum():,}")
-print(f"Filas con precio único y positivo:       {len(precios):,}")
+print(f"Filas con escala de valores (se usa el máximo): {len(rangos):,} ({len(rangos) / len(tarifario):.1%})")
+print(f"Filas con precio cero (descartadas):            {(tarifario['valor'] <= 0).sum():,}")
+print(f"Filas con precio positivo:                      {len(precios):,}")
 rangos[["entidad", "concepto", "tipoTarjeta", "valorMinimo", "valorMaximo", "unidadValor"]].head()
 """)
 
@@ -389,10 +391,21 @@ quedan tras cada uno (un **embudo**):
 
 1. **Tipo de entidad** (opcional).
 2. **Moneda:** comparar pesos con dólares mediría el tipo de cambio, no precios.
-3. **Gama:** sólo las tres tarjetas personales comparables entre sí —clásica, oro y
-   platino—; fuera quedan corporativas, empresariales y de flotilla.
-4. **Tipo de cargo:** la variable del grupo (`CARGO`).
-5. **Unidad:** un mismo cargo puede publicarse como porcentaje o como monto fijo, y no se
+3. **Gama:** sólo las tarjetas personales —clásica, oro, platino y superior—; fuera quedan
+   corporativas, empresariales y de flotilla. El API junta platino y superior, y el SIMBAD
+   las separa: aquí se reconoce Superior por el nombre del producto (Infinite, Black...).
+4. **Tarjeta principal:** un producto suele traer dos filas, una el doble de la otra y sin
+   columna que las distinga. Se toma la mayor, como el SIMBAD: en la emisión, que sí viene
+   separada, la adicional cuesta la mitad. «Emisión de Adicional» no se analiza.
+5. **Tipo de cargo:** la variable del grupo (`CARGO`).
+6. **Periodicidad:** cobrar 1,500 al año no es cobrar 1,500 al mes (`PERIODICIDAD`).
+7. **Corrección de LA NACIONAL:** su tarjeta tiene una vigencia de 4 años y, antes de julio de
+   2026, el API trae el total: marcado anual en renovación y por adelantado en emisión (3,600 es
+   4 x 900; 32,000 es 4 x 8,000). Se lleva al valor anual, que en emisión es un equivalente y no
+   el pago inicial, según su
+   [tarifario](https://asociacionlanacional.com.do/docs/tarifas/tarifario-general-de-productos-y-servicios.pdf).
+   Es una deducción pendiente de confirmar con soporte del API.
+8. **Unidad:** un mismo cargo puede publicarse como porcentaje o como monto fijo, y no se
    pueden promediar entre sí.
 """)
 
@@ -402,22 +415,47 @@ GAMAS = {
     "TARJETA DE CREDITO PERSONAL ORO/GOLD": "Oro",
     "TARJETA DE CREDITO PERSONAL PLATINO/PLATINUM (O SUPERIOR)": "Platino",
 }
-ORDEN_GAMAS = ["Clásica", "Oro", "Platino"]
+ORDEN_GAMAS = ["Clásica", "Oro", "Platino", "Superior"]
+GAMAS_ESCALERA = ["Clásica", "Oro", "Platino"]   # las que se siguen dentro de cada entidad
+PATRON_SUPERIOR = r"INFINI|INFINT|BLACK|SIGNATURE|ELITE|INSIGNIA|PRESTIGE|PRIVILIGE|ONYX"
+CLAVES_PRODUCTO = ["periodo", "entidad", "nombreProducto", "marca", "gama", "concepto", "periodicidad", "unidadValor"]
 CODIGOS = {
     "BANCOS MÚLTIPLES": "BM",
     "ASOCIACIONES DE AHORROS Y PRÉSTAMOS": "AAyP",
     "BANCOS DE AHORRO Y CRÉDITO": "BAyC",
 }
 
-embudo = [("Tarifario descargado (filas únicas)", len(tarifario)), ("Con precio único y positivo", len(precios))]
+embudo = [("Tarifario descargado (filas únicas)", len(tarifario)), ("Con precio positivo", len(precios))]
 filtrado = precios
 if TIPOS_ENTIDAD:
     filtrado = filtrado[filtrado["tipoEntidad"].map(CODIGOS).isin(TIPOS_ENTIDAD)]
     embudo.append((f"Tipo de entidad: {', '.join(TIPOS_ENTIDAD)}", len(filtrado)))
 filtrado = filtrado[filtrado["moneda"] == MONEDA]
 embudo.append((f"Moneda: {MONEDA}", len(filtrado)))
-personales = filtrado[filtrado["tipoTarjeta"].isin(GAMAS)].assign(gama=lambda d: d["tipoTarjeta"].map(GAMAS))
-embudo.append(("Tarjetas personales clásica, oro y platino", len(personales)))
+personales = filtrado[
+    filtrado["tipoTarjeta"].isin(GAMAS) & (filtrado["concepto"] != "Cargo por Emisión de Adicional")
+].reset_index(drop=True)
+gama = personales["tipoTarjeta"].map(GAMAS)
+es_superior = (gama == "Platino") & personales["nombreProducto"].astype(str).str.contains(PATRON_SUPERIOR, case=False)
+personales = personales.assign(gama=gama.mask(es_superior, "Superior"))
+embudo.append(("Tarjetas personales", len(personales)))
+personales = personales.loc[personales.groupby(CLAVES_PRODUCTO, dropna=False)["valor"].idxmax()].reset_index(drop=True)
+embudo.append(("Un precio por producto: tarjeta principal", len(personales)))
+
+
+# Antes de julio de 2026 trae el total de 4 años; platino, además, otra vez por 4.
+def anualizar_la_nacional(marco: pd.DataFrame) -> pd.DataFrame:
+    afectadas = (
+        (marco["entidad"] == "LA NACIONAL")
+        & marco["concepto"].isin(["Cargo por Renovación", "Cargo por Emisión de Principal"])
+        & (marco["unidadValor"] == "DOP")
+        & (marco["periodo"].astype(str).str[:7] < "2026-07")
+    )
+    divisor = (marco["gama"] == "Platino").map({True: 16, False: 4})
+    return marco.assign(valor=marco["valor"].where(~afectadas, marco["valor"] / divisor))
+
+
+personales = anualizar_la_nacional(personales)
 print(f"{len(personales):,} registros de {personales['entidad'].nunique()} entidades")
 """)
 
@@ -528,15 +566,16 @@ code("""
 ancho = por_entidad.pivot_table(index="entidad", columns="gama", values="valor")[gamas]
 ancho = ancho.loc[ancho.mean(axis=1).sort_values().index]
 
-escalera = ancho.dropna().assign(multiplica=lambda d: d.max(axis=1) / d.min(axis=1))
+base = [g for g in GAMAS_ESCALERA if g in ancho.columns]   # muchas entidades no tienen Superior
+escalera = ancho[base].dropna().assign(multiplica=lambda d: d.max(axis=1) / d.min(axis=1))
 escalera = escalera.sort_values("multiplica", ascending=False)
-print(f"{len(escalera)} entidades publican el cargo en todas las gamas. La típica cobra "
+print(f"{len(escalera)} entidades publican el cargo en clásica, oro y platino. La típica cobra "
       f"{escalera['multiplica'].median():.1f} veces más en su gama más cara que en la más barata; "
       f"{escalera.index[0]} llega a {escalera['multiplica'].iloc[0]:.1f} veces.")
 display(escalera)
 
 fig, ax = plt.subplots(figsize=(10, max(4, 0.35 * len(ancho))))
-for gama, color in zip(gamas, ["#009FE3", "#E8A100", "#7A5195"]):
+for gama, color in zip(gamas, ["#009FE3", "#E8A100", "#7A5195", "#222222"]):
     ax.scatter(ancho[gama], ancho.index, label=gama, color=color, s=45, zorder=3)
 ax.set_title(f"{CARGO}: precio de cada entidad por gama ({UNIDAD})")
 ax.set_xlabel(f"Precio ({UNIDAD})")
@@ -577,10 +616,10 @@ con las entidades que publican el cargo en las tres gamas.
 """)
 
 code("""
-completas = ancho.dropna()
-print(f"Entidades con precio en las tres gamas: {len(completas)}")
-if len(gamas) == 3 and len(completas) >= 3 and completas.nunique().sum() > 3:
-    friedman = stats.friedmanchisquare(*[completas[g] for g in gamas])
+completas = ancho[base].dropna()
+print(f"Entidades con precio en clásica, oro y platino: {len(completas)}")
+if len(base) == 3 and len(completas) >= 3 and completas.nunique().sum() > 3:
+    friedman = stats.friedmanchisquare(*[completas[g] for g in base])
     valor_p = "p < 0.0001" if friedman.pvalue < 0.0001 else f"p = {friedman.pvalue:.4f}"
     print(f"Friedman χ² = {friedman.statistic:.2f}, {valor_p}")
     print("Se rechaza H₀ (α = 0.05): el precio cambia con la gama." if friedman.pvalue < 0.05
@@ -656,20 +695,21 @@ Son los filtros de la sección 8, ahora escritos sobre todos los meses.
 """)
 
 code("""
-del_cargo_t = historia.assign(
-    valor=pd.to_numeric(historia["valor"], errors="coerce"),
-    valorMinimo=pd.to_numeric(historia["valorMinimo"], errors="coerce").fillna(0),
-    mes=historia["periodo"].astype(str).str[:7],
-)
+numericos = historia[["valor", "valorMaximo"]].apply(pd.to_numeric, errors="coerce").fillna(0)
+del_cargo_t = historia.assign(valor=numericos.max(axis=1), mes=historia["periodo"].astype(str).str[:7])
 del_cargo_t = del_cargo_t[
-    (del_cargo_t["valorMinimo"] <= 0)
-    & (del_cargo_t["valor"] > 0)
+    (del_cargo_t["valor"] > 0)
     & (del_cargo_t["moneda"] == MONEDA)
     & (del_cargo_t["tipoTarjeta"].isin(GAMAS))
     & (del_cargo_t["concepto"] == CARGO)
     & (del_cargo_t["periodicidad"] == PERIODICIDAD)
     & (del_cargo_t["unidadValor"] == UNIDAD)
-].assign(gama=lambda d: d["tipoTarjeta"].map(GAMAS))
+].reset_index(drop=True)
+gama_t = del_cargo_t["tipoTarjeta"].map(GAMAS)
+superior_t = (gama_t == "Platino") & del_cargo_t["nombreProducto"].astype(str).str.contains(PATRON_SUPERIOR, case=False)
+del_cargo_t = del_cargo_t.assign(gama=gama_t.mask(superior_t, "Superior"))
+del_cargo_t = del_cargo_t.loc[del_cargo_t.groupby(CLAVES_PRODUCTO, dropna=False)["valor"].idxmax()].reset_index(drop=True)
+del_cargo_t = anualizar_la_nacional(del_cargo_t)
 if TIPOS_ENTIDAD:
     del_cargo_t = del_cargo_t[del_cargo_t["tipoEntidad"].map(CODIGOS).isin(TIPOS_ENTIDAD)]
 
@@ -690,7 +730,7 @@ serie = (
     .agg(entidades="count", q1=lambda v: v.quantile(0.25), mediana="median", q3=lambda v: v.quantile(0.75))
     .reset_index()
 )
-COLORES = {"Clásica": "#0B6BE0", "Oro": "#C9920F", "Platino": "#5B6B85"}
+COLORES = {"Clásica": "#0B6BE0", "Oro": "#C9920F", "Platino": "#5B6B85", "Superior": "#222222"}
 
 fig, ax = plt.subplots(figsize=(11, 5.5))
 posicion = {m: i for i, m in enumerate(meses_linea)}
@@ -785,6 +825,7 @@ from simbad import estudio_tarjetas as estudio
 from simbad.client import SimbadClient
 
 assert estudio.GAMAS == GAMAS and estudio.ORDEN_GAMAS == ORDEN_GAMAS
+assert estudio.PATRON_SUPERIOR == PATRON_SUPERIOR
 
 pd.testing.assert_frame_equal(estudio.precio_por_entidad(del_cargo), por_entidad)
 
@@ -819,6 +860,35 @@ assert len(filas) == len(crudo.drop_duplicates())
 
 print("OK: precio por entidad, estadística descriptiva, descomposición, atípicos y línea de tiempo coinciden con la app.")
 print(f"OK: el cliente de la app descarga los mismos {len(filas):,} registros únicos.")
+""")
+
+md("""
+### 12.1 Verificación contra el panel público del SIMBAD
+
+El panel [Tasas y Comisiones](https://simbad.sb.gob.do/superset/dashboard/comisiones/) publica
+una mediana por mes, entidad, marca y gama. `notebooks/referencia_simbad/renovacion_dop.csv`
+guarda sus valores de renovación en pesos para tres meses, tomados de la pestaña «Datos para
+descarga». Aquí se comprueba cuántos reproduce el método, con todas las periodicidades porque
+el panel no las separa, y sin la corrección de LA NACIONAL porque el panel publica sus valores
+tal cual en esos meses.
+""")
+
+code("""
+referencia = pd.read_csv(RAIZ / "notebooks" / "referencia_simbad" / "renovacion_dop.csv", encoding="utf-8-sig")
+meses_ref = sorted(referencia["mes"].unique())
+tarifario_ref, fallidos_ref = descargar_meses(API_KEY, meses_ref)
+assert not fallidos_ref, f"No se pudieron descargar: {fallidos_ref}"
+renovacion = estudio.precios_personales(tarifario_ref, "DOP", corregir=False)
+renovacion = renovacion[renovacion["concepto"] == "Cargo por Renovación"]
+cruce_simbad = estudio.comparar_con_simbad(renovacion, referencia)
+
+por_mes_ref = cruce_simbad.groupby("mes")["coincide"].agg(coinciden="sum", comparados="count")
+por_mes_ref["%"] = (por_mes_ref["coinciden"] / por_mes_ref["comparados"] * 100).round(1)
+display(por_mes_ref)
+print("Los que no coinciden:")
+display(cruce_simbad[~cruce_simbad["coincide"]].drop(columns="coincide"))
+assert (por_mes_ref["%"] >= 90).all(), "El método se alejó del SIMBAD: revisar las reglas de la sección 8."
+print("OK: el método reproduce al menos el 90 % de los precios de renovación del SIMBAD en cada mes.")
 """)
 
 md("## 13. Exportar y reproducir")
@@ -871,10 +941,12 @@ md("""
 **Limitaciones que conviene decir en la presentación:**
 
 - Es **precio de lista** (lo que la entidad publica), no lo que pagó un cliente concreto.
-- Las secciones 9 y 10 son la **foto de un mes**, y una entidad nueva puede moverla: LA
-  NACIONAL entra en platino en abril de 2026 con dos productos (16,000 y 32,000), y por eso
-  la mayor diferencia salta de 5.7 a 17.1 veces. La sección 11 sólo compara entidades
-  presentes en ambos períodos.
+- **LA NACIONAL está corregida a mano** a su valor anual (sección 8): sin eso, su platino de
+  32,000 daría una diferencia de 22.9 veces que no existe. Es una deducción aún sin confirmar, y
+  otras entidades podrían reportar también totales de varios años: eso no se ha revisado.
+- **Se alinea con el SIMBAD, pero no en todo:** que la fila mayor sea la tarjeta principal es
+  una inferencia, y Superior se separa por el nombre del producto. En avance de efectivo e
+  interés el método no reproduce el panel.
 - Los precios son **nominales**: la comparación entre períodos no descuenta la inflación.
 - La descomposición de la varianza es **descriptiva**: mide asociación, no causa.
 - Un banco caro en este cargo puede ser barato en otro: no es una recomendación.

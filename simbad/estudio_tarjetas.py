@@ -18,7 +18,33 @@ GAMAS = {
     "TARJETA DE CREDITO PERSONAL ORO/GOLD": "Oro",
     "TARJETA DE CREDITO PERSONAL PLATINO/PLATINUM (O SUPERIOR)": "Platino",
 }
-ORDEN_GAMAS = ["Clásica", "Oro", "Platino"]
+ORDEN_GAMAS = ["Clásica", "Oro", "Platino", "Superior"]
+
+#: Las gamas que se siguen dentro de una misma entidad. Muchas no tienen tarjeta Superior,
+#: y exigirla dejaría fuera a la mitad del mercado.
+GAMAS_ESCALERA = ["Clásica", "Oro", "Platino"]
+
+#: El API junta «PLATINO/PLATINUM (O SUPERIOR)» y el SIMBAD las separa. El API no trae el
+#: dato, así que Superior se reconoce por el nombre del producto (INFINTE y PRIVILIGE son
+#: erratas tal como vienen en el API). Con esta lista, la renovación coincide con el SIMBAD
+#: en el 93–95 % de los precios: ver la verificación del notebook.
+PATRON_SUPERIOR = r"INFINI|INFINT|BLACK|SIGNATURE|ELITE|INSIGNIA|PRESTIGE|PRIVILIGE|ONYX"
+
+#: El estudio sólo mira la tarjeta principal: no todo cliente tiene una adicional.
+CARGOS_EXCLUIDOS = ("Cargo por Emisión de Adicional",)
+
+#: LA NACIONAL cobra estos cargos con una vigencia de 4 años, y antes de julio de 2026 el
+#: API y el panel traen el total, marcado ANUAL en renovación y POR ADELANTADO en emisión:
+#: 3,600 es 4 x 900, 5,800 es 4 x 1,450 y
+#: 32,000 es 4 x 8,000, un total multiplicado otra vez por 4. Desde julio el panel muestra el
+#: cargo anual, que coincide con el tarifario publicado por la entidad. Es una deducción a
+#: partir de esas cifras, pendiente de confirmar con soporte del API.
+ENTIDAD_VIGENCIA = "LA NACIONAL"
+CARGOS_VIGENCIA = ("Cargo por Renovación", "Cargo por Emisión de Principal")
+PRIMER_MES_ANUAL = "2026-07"
+FUENTE_VIGENCIA = (
+    "https://asociacionlanacional.com.do/docs/tarifas/tarifario-general-de-productos-y-servicios.pdf"
+)
 
 #: Entidades que deben publicar un servicio para que tenga sentido compararlo. Es el
 #: umbral con todo el mercado (unas veintitrés entidades). Cuando el filtro de tipo
@@ -48,7 +74,8 @@ def cargos_disponibles(frame: pd.DataFrame) -> list[str]:
     las tres gamas que analiza el estudio, para que ninguna opción deje la página vacía.
     """
     personales = frame[frame["tipoTarjeta"].isin(GAMAS)]
-    return sorted(personales["concepto"].dropna().astype(str).str.strip().unique())
+    conceptos = personales["concepto"].dropna().astype(str).str.strip().unique()
+    return sorted(c for c in conceptos if c not in CARGOS_EXCLUIDOS)
 
 
 def dispersion(frame: pd.DataFrame) -> pd.DataFrame:
@@ -60,7 +87,10 @@ def dispersion(frame: pd.DataFrame) -> pd.DataFrame:
     entidad es el que publicó de forma típica en ese período.
     """
     if frame.empty:
-        return pd.DataFrame()
+        # Con las columnas: una gama puede quedar vacía, y quien llama filtra por ellas.
+        return pd.DataFrame(
+            columns=["concepto", "unidadValor", "entidades", "minimo", "mediana", "maximo", "veces"]
+        )
     por_entidad = (
         frame.groupby(["concepto", "unidadValor", "entidad"])["valor"].median().reset_index()
     )
@@ -156,25 +186,87 @@ def explica(frame: pd.DataFrame, por: list[str], columna: str = "logp") -> float
 # ------------------------------------------------------------ Línea de tiempo
 
 
-def precios_personales(frame: pd.DataFrame, moneda: str) -> pd.DataFrame:
-    """Precios únicos de las tres gamas personales en una moneda, con su ``gama``.
+def gama_de(tipos: pd.Series, productos: pd.Series) -> pd.Series:
+    """Gama de cada fila: la del API, separando Superior de Platino por el nombre."""
+    gama = tipos.map(GAMAS)
+    superior = (gama == "Platino") & productos.astype(str).str.contains(
+        PATRON_SUPERIOR, case=False, regex=True
+    )
+    return gama.mask(superior, "Superior")
 
-    Aparta las filas que declaran un rango en vez de un precio (``valorMinimo`` > 0,
-    con ``valor`` en cero) y las de precio cero, igual en la foto de un mes que en la
-    línea de tiempo.
+
+def corregir_vigencia(filas: pd.DataFrame) -> pd.DataFrame:
+    """Lleva a su valor anual los cargos de LA NACIONAL anteriores a julio de 2026."""
+    afectadas = (
+        (filas["entidad"] == ENTIDAD_VIGENCIA)
+        & filas["concepto"].isin(CARGOS_VIGENCIA)
+        & (filas["unidadValor"] == "DOP")
+        & (filas["periodo"].astype(str).str[:7] < PRIMER_MES_ANUAL)
+    )
+    divisor = (filas["gama"] == "Platino").map({True: 16, False: 4})
+    return filas.assign(
+        valor=filas["valor"].where(~afectadas, filas["valor"] / divisor), corregido=afectadas
+    )
+
+
+def precios_personales(
+    frame: pd.DataFrame, moneda: str, *, corregir: bool = True
+) -> pd.DataFrame:
+    """Precio de la tarjeta principal de cada producto personal, con el método del SIMBAD.
+
+    Un mismo producto suele traer dos filas, una el doble de la otra y sin columna que las
+    distinga (LA NACIONAL, VISA PLATINUM: 16,000 y 32,000), y otras veces un rango con
+    ``valor`` en cero (495 a 990). El SIMBAD publica la mayor y el extremo superior. Es
+    también lo que encaja con la tarjeta principal: en la emisión, que sí viene separada,
+    ese mismo producto cobra 32,000 a la principal y 16,000 a la adicional.
+
+    Con ``corregir=False`` no se aplica :func:`corregir_vigencia`: es lo que hay que usar
+    para comparar con el panel, que publica esos valores sin corregir.
     """
     marco = frame.reset_index(drop=True)
-    valor = pd.to_numeric(marco["valor"], errors="coerce")
-    minimo = pd.to_numeric(marco["valorMinimo"], errors="coerce").fillna(0)
+    valor = pd.to_numeric(marco["valor"], errors="coerce").fillna(0)
+    maximo = pd.to_numeric(marco["valorMaximo"], errors="coerce").fillna(0)
+    precio = valor.where(valor >= maximo, maximo)
     elegidas = (
-        (minimo <= 0)
-        & (valor > 0)
+        (precio > 0)
         & (marco["moneda"] == moneda)
         & marco["tipoTarjeta"].isin(GAMAS)
+        & ~marco["concepto"].isin(CARGOS_EXCLUIDOS)
     )
-    return marco[elegidas].assign(
-        valor=valor[elegidas], gama=lambda d: d["tipoTarjeta"].map(GAMAS)
+    filas = marco[elegidas].assign(
+        valor=precio[elegidas],
+        gama=lambda d: gama_de(d["tipoTarjeta"], d["nombreProducto"]),
     )
+    claves = [
+        "periodo", "entidad", "nombreProducto", "marca", "gama",
+        "concepto", "periodicidad", "unidadValor",
+    ]
+    principal = filas.groupby(claves, observed=True, dropna=False)["valor"].idxmax()
+    unicas = filas.loc[principal].reset_index(drop=True)
+    return corregir_vigencia(unicas) if corregir else unicas.assign(corregido=False)
+
+
+def comparar_con_simbad(filas: pd.DataFrame, referencia: pd.DataFrame) -> pd.DataFrame:
+    """Cruza el precio calculado con los valores publicados en el panel del SIMBAD.
+
+    El panel da una mediana por mes, entidad, marca y gama. ``referencia`` trae esas
+    columnas (``mes``, ``entidad``, ``marca``, ``gama``) y ``simbad``, y ``filas`` sale de
+    :func:`precios_personales` con ``corregir=False``. Devuelve sólo las combinaciones presentes en ambos lados.
+    """
+    calculado = (
+        filas.assign(
+            mes=filas["periodo"].astype(str).str[:7],
+            marca=filas["marca"].astype(str).str.upper().str.replace(
+                r" \(EXCLUSIVA.*", "", regex=True
+            ),
+        )
+        .groupby(["mes", "entidad", "marca", "gama"])["valor"]
+        .median()
+        .rename("calculado")
+        .reset_index()
+    )
+    cruce = calculado.merge(referencia, on=["mes", "entidad", "marca", "gama"])
+    return cruce.assign(coincide=(cruce["calculado"] - cruce["simbad"]).abs() < 0.005)
 
 
 def nombre_variable(cargo: str, periodicidad: str | None) -> str:

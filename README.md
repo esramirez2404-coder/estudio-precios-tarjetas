@@ -85,6 +85,23 @@ publicarse con varias periodicidades, y cada una se analiza por separado: cobrar
 año no es cobrar 1,500 al mes, y en 2026 aparecen filas mensuales y por adelantado de este
 cargo que en 2025 no existían.
 
+**Alineado con el panel público del SIMBAD** (*Tasas y Comisiones*). Cada precio es el de la
+**tarjeta principal**: el API suele traer dos filas por producto, una el doble de la otra y
+sin columna que las distinga, y el panel publica la mayor. En los rangos se toma el extremo
+superior, «Emisión de Adicional» no se analiza y Superior (Infinite, Black...) se separa de
+Platino por el nombre del producto, porque el API las junta. En renovación, esto reproduce
+101 de 106 valores del panel en mayo de 2026, 101 de 105 en marzo de 2026 y 98 de 105 en marzo
+de 2025; el notebook lo comprueba contra `notebooks/referencia_simbad/renovacion_dop.csv`. Con
+avance de efectivo e interés el método no reproduce el panel, y que la fila mayor sea la
+principal es una inferencia pendiente de confirmar con soporte del API. El API llega a mayo
+de 2026, mientras el panel va por septiembre.
+
+**Corrección de LA NACIONAL.** Su tarjeta tiene una vigencia de 4 años y, antes de julio de
+2026, el API y el panel traen el total de renovación (marcada anual) y de emisión (por adelantado)
+(3,600 es 4 x 900; 32,000 es 4 x 8,000). `estudio_tarjetas.corregir_vigencia` lo lleva al valor
+anual (en emisión es un equivalente, no el pago inicial), según el [tarifario de la entidad](https://asociacionlanacional.com.do/docs/tarifas/tarifario-general-de-productos-y-servicios.pdf).
+Es el único dato que no sale tal cual del API, y es una deducción pendiente de confirmar.
+
 **La línea de tiempo** sigue el cargo elegido mes a mes y compara dos trimestres, por
 ejemplo T1 2025 y T1 2026: mediana por gama, cuántas entidades suben, bajan o no cambian, y
 cada entidad con sus dos precios. Sólo entran en la comparación las entidades que publicaron
@@ -164,7 +181,10 @@ simbad/
 notebooks/
     estudio_precios_tarjetas.ipynb   El estudio paso a paso, ya ejecutado
     generar_notebook.py              Genera el notebook
+    referencia_simbad/               Valores del panel público para verificar el método
     salidas/                         CSV que exporta el notebook
+scripts/
+    api_crudo.py            Muestra el tarifario tal cual lo devuelve el API
 .streamlit/config.toml      Tema oscuro con la escala de colores validada
 ```
 

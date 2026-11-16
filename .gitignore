@@ -24,3 +24,6 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Referencia del panel público para verificar el método; sí se sube.
+!notebooks/referencia_simbad/*.csv

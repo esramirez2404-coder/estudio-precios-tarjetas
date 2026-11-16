@@ -44,7 +44,7 @@ SERIE_PRINCIPAL = "#009FE3"
 
 #: Color de cada gama en los gráficos: el metal de la tarjeta de la portada llevado a
 #: un tono con contraste ≥ 3:1 sobre el fondo. Clásica reutiliza el Sky Blue de marca.
-COLORES_GAMA = {"Clásica": "#19C3FF", "Oro": "#FFC400", "Platino": "#E8EEF7"}
+COLORES_GAMA = {"Clásica": "#19C3FF", "Oro": "#FFC400", "Platino": "#E8EEF7", "Superior": "#B79CFF"}
 
 #: La serie que está bajo el puntero se enciende con el amarillo de marca; las demás
 #: quedan en un navy apagado que no compite con ella.
