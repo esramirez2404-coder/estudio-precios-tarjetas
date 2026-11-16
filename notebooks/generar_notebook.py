@@ -55,6 +55,9 @@ la app cuando se elige un cargo: ningún otro servicio entra en las cifras.
 
 > **Cómo usarlo:** cambia `CARGO` en la celda de parámetros y ejecuta
 > *Kernel → Restart Kernel and Run All Cells*. La descarga tarda alrededor de un minuto.
+>
+> **Sin clave del API también corre:** usa los datos guardados en `notebooks/datos/`
+> (sección 2.1), con las cifras del día en que se guardaron.
 """)
 
 md("## 1. Librerías y parámetros")
@@ -110,6 +113,11 @@ El API exige una clave que se obtiene en <https://desarrollador.sb.gob.do> y via
 cabecera `Ocp-Apim-Subscription-Key`. **Nunca se escribe en el código**: se lee de la
 variable de entorno `SIMBAD_API_KEY` o del mismo archivo que usa la app,
 `.streamlit/secrets.toml`, que está en `.gitignore` y no se sube al repositorio.
+
+**Sin clave también corre.** Si no la encuentra, usa los datos guardados en `notebooks/datos/`,
+descargados con esta misma consulta por `scripts/guardar_instantanea.py`. Las cifras son las de
+ese día: sólo cambia que las llamadas de las secciones 2, 3 y 6 se muestran tal como se
+guardaron, y que una comprobación de la sección 12, que necesita el API, se omite.
 """)
 
 code("""
@@ -126,9 +134,24 @@ def leer_clave() -> str:
 
 
 API_KEY = leer_clave()
-if not API_KEY:
-    raise RuntimeError("Falta la clave: define SIMBAD_API_KEY o crea .streamlit/secrets.toml")
-print(f"Clave cargada ({len(API_KEY)} caracteres). No se imprime: es un secreto.")
+EN_VIVO = bool(API_KEY)
+DATOS = RAIZ / "notebooks" / "datos"
+if EN_VIVO:
+    print(f"Clave cargada ({len(API_KEY)} caracteres). No se imprime: es un secreto.")
+elif (DATOS / "llamadas.json").exists():
+    GUARDADO = json.loads((DATOS / "llamadas.json").read_text(encoding="utf-8"))
+    print(f"Sin clave: se usan los datos de notebooks/datos/, descargados el {GUARDADO['descargado']} "
+          f"con la misma consulta (último mes publicado entonces: {GUARDADO['ultimo']}).")
+else:
+    raise RuntimeError("Sin clave ni datos guardados: define SIMBAD_API_KEY o ejecuta scripts/guardar_instantanea.py")
+
+
+def leer_guardados(meses: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    # Lo mismo que devuelve descargar_meses (sección 11), pero desde notebooks/datos/tarifario.
+    rutas = {mes: DATOS / "tarifario" / f"{mes}.parquet" for mes in meses}
+    faltan = [mes for mes, ruta in rutas.items() if not ruta.exists()]
+    marcos = [pd.read_parquet(ruta) for ruta in rutas.values() if ruta.exists()]
+    return (pd.concat(marcos, ignore_index=True) if marcos else pd.DataFrame()), faltan
 """)
 
 md("""
@@ -197,13 +220,24 @@ cuántos registros y páginas tiene la consulta completa.
 
 code("""
 mes_prueba = str(pd.Timestamp.today().to_period("M") - 12)
-respuesta = consultar(parametros(mes_prueba, registros=3))
+if EN_VIVO:
+    respuesta = consultar(parametros(mes_prueba, registros=3))
+    llamada = {
+        "url": respuesta.url,
+        "http": respuesta.status_code,
+        "segundos": respuesta.elapsed.total_seconds(),
+        "x_pagination": json.loads(respuesta.headers.get("x-pagination", "{}")),
+        "primer_registro": respuesta.json()[0],
+    }
+else:
+    llamada = GUARDADO["primera_llamada"]
+    print(f"(Respuesta guardada el {GUARDADO['descargado']}, mes {llamada['mes']})")
 
-print("URL:", respuesta.url)
-print("HTTP", respuesta.status_code, "en", respuesta.elapsed.total_seconds(), "segundos")
-print("x-pagination:", json.dumps(json.loads(respuesta.headers.get("x-pagination", "{}")), indent=2))
+print("URL:", llamada["url"])
+print("HTTP", llamada["http"], "en", llamada["segundos"], "segundos")
+print("x-pagination:", json.dumps(llamada["x_pagination"], indent=2))
 print("Primer registro:")
-print(json.dumps(respuesta.json()[0], indent=2, ensure_ascii=False))
+print(json.dumps(llamada["primer_registro"], indent=2, ensure_ascii=False))
 """)
 
 md("""
@@ -221,9 +255,14 @@ casos = {
     "tipoEntidad=BM,AAyP (con comas)": [("periodoInicial", mes_prueba), ("periodoFinal", mes_prueba),
                                          ("tipoEntidad", "BM,AAyP"), ("registros", "3")],
 }
-for caso, params in casos.items():
-    r = consultar(params)
-    print(f"{caso:<34} → HTTP {r.status_code}: {r.text[:110]}")
+if EN_VIVO:
+    for caso, params in casos.items():
+        r = consultar(params)
+        print(f"{caso:<34} → HTTP {r.status_code}: {r.text[:110]}")
+else:
+    print(f"(Respuestas guardadas el {GUARDADO['descargado']})")
+    for caso in GUARDADO["errores"]:
+        print(f"{caso['caso']:<34} → HTTP {caso['http']}: {caso['texto']}")
 """)
 
 md("""
@@ -250,7 +289,10 @@ def ultimo_periodo(meses_atras: int = 15) -> tuple[str, pd.DataFrame]:
     raise RuntimeError(f"Ningún mes con datos en los últimos {meses_atras} meses")
 
 
-ultimo, sondeo = ultimo_periodo()
+if EN_VIVO:
+    ultimo, sondeo = ultimo_periodo()
+else:
+    ultimo, sondeo = GUARDADO["ultimo"], pd.DataFrame(GUARDADO["sondeo"])
 display(sondeo)
 PERIODO = PERIODO or ultimo
 print("Último mes publicado:", ultimo, "| Período que se analiza:", PERIODO)
@@ -284,7 +326,15 @@ def descargar(periodo: str) -> pd.DataFrame:
     return datos
 
 
-crudo = descargar(PERIODO)
+if EN_VIVO:
+    crudo = descargar(PERIODO)
+elif PERIODO != GUARDADO["periodo"]:
+    raise RuntimeError(f"Sin clave sólo hay datos de {GUARDADO['periodo']}: deja PERIODO = None o define SIMBAD_API_KEY.")
+else:
+    crudo = pd.read_parquet(DATOS / f"crudo_{PERIODO}.parquet")
+    paginas = GUARDADO["paginacion"]
+    print(f"{len(crudo):,} registros guardados; llegaron en {paginas['paginas']} páginas "
+          f"(el API anunció {paginas['anunciados']}).")
 crudo.shape
 """)
 
@@ -345,13 +395,22 @@ repeticiones vienen del propio API y no de cómo se recorrieron las páginas.
 """)
 
 code("""
-r = consultar(parametros(PERIODO, registros=20000))
-una_pagina = pd.DataFrame(r.json())
-print(f"Una sola página: {len(una_pagina):,} filas, {len(una_pagina.drop_duplicates()):,} únicas "
-      f"en {r.elapsed.total_seconds():.1f} s")
-
 clave = lambda df: set(map(tuple, df.astype(str)[sorted(df.columns)].drop_duplicates().to_numpy()))
-print("¿Mismas filas únicas que la descarga paginada?", clave(una_pagina) == clave(crudo))
+if EN_VIVO:
+    r = consultar(parametros(PERIODO, registros=20000))
+    una_pagina = pd.DataFrame(r.json())
+    prueba = {
+        "filas": len(una_pagina),
+        "unicas": len(una_pagina.drop_duplicates()),
+        "segundos": r.elapsed.total_seconds(),
+        "iguales": clave(una_pagina) == clave(crudo),
+    }
+else:
+    prueba = GUARDADO["una_pagina"]
+    print(f"(Prueba hecha el {GUARDADO['descargado']}: sin clave no se puede repetir)")
+
+print(f"Una sola página: {prueba['filas']:,} filas, {prueba['unicas']:,} únicas en {prueba['segundos']:.1f} s")
+print("¿Mismas filas únicas que la descarga paginada?", prueba["iguales"])
 """)
 
 md("""
@@ -683,7 +742,7 @@ nombre_a, nombre_b = f"{PERIODO_A[1]} {PERIODO_A[0]}", f"{PERIODO_B[1]} {PERIODO
 meses_linea = meses_de_la_linea(meses_a[0], meses_b[-1], meses_a + meses_b)
 
 inicio = time.perf_counter()
-historia, fallidos = descargar_meses(API_KEY, meses_linea)
+historia, fallidos = descargar_meses(API_KEY, meses_linea) if EN_VIVO else leer_guardados(meses_linea)
 assert not fallidos, f"No se pudieron descargar: {fallidos}. Vuelve a ejecutar esta celda."
 print(f"{len(meses_linea)} meses, {len(historia):,} registros, {time.perf_counter() - inicio:.1f} s")
 """)
@@ -852,14 +911,17 @@ np.testing.assert_allclose(
     por_periodo[["mediana_a", "mediana_b", "variacion_pct", "veces_a", "veces_b"]].to_numpy(),
 )
 
-cliente = SimbadClient(API_KEY)
-filas, informe = cliente.fetch_raw(
-    "TasasComisionesTarjetasCredito", PERIODO, PERIODO, filters={"tipoEntidad": TIPOS_ACEPTADOS}, page_size=20000
-)
-assert len(filas) == len(crudo.drop_duplicates())
-
 print("OK: precio por entidad, estadística descriptiva, descomposición, atípicos y línea de tiempo coinciden con la app.")
-print(f"OK: el cliente de la app descarga los mismos {len(filas):,} registros únicos.")
+
+if EN_VIVO:
+    cliente = SimbadClient(API_KEY)
+    filas, informe = cliente.fetch_raw(
+        "TasasComisionesTarjetasCredito", PERIODO, PERIODO, filters={"tipoEntidad": TIPOS_ACEPTADOS}, page_size=20000
+    )
+    assert len(filas) == len(crudo.drop_duplicates())
+    print(f"OK: el cliente de la app descarga los mismos {len(filas):,} registros únicos.")
+else:
+    print("Omitido sin clave: comparar con el cliente de la app exige llamar al API.")
 """)
 
 md("""
@@ -876,7 +938,7 @@ tal cual en esos meses.
 code("""
 referencia = pd.read_csv(RAIZ / "notebooks" / "referencia_simbad" / "renovacion_dop.csv", encoding="utf-8-sig")
 meses_ref = sorted(referencia["mes"].unique())
-tarifario_ref, fallidos_ref = descargar_meses(API_KEY, meses_ref)
+tarifario_ref, fallidos_ref = descargar_meses(API_KEY, meses_ref) if EN_VIVO else leer_guardados(meses_ref)
 assert not fallidos_ref, f"No se pudieron descargar: {fallidos_ref}"
 renovacion = estudio.precios_personales(tarifario_ref, "DOP", corregir=False)
 renovacion = renovacion[renovacion["concepto"] == "Cargo por Renovación"]

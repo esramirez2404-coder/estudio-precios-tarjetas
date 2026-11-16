@@ -153,6 +153,26 @@ Se usa cambiando `CARGO` en la celda de parámetros y ejecutando todo de nuevo (
 Kernel and Run All Cells*). La clave nunca se imprime. Los CSV que exporta quedan en
 `notebooks/salidas/`, que no se sube al repositorio.
 
+### Correrlo sin clave
+
+Quien no tiene clave del API puede ejecutarlo igual: si no la encuentra, el notebook lee
+`notebooks/datos/`, una copia de lo que devolvió el API descargada con la misma consulta
+(el mes crudo con sus filas repetidas, el tarifario mes a mes desde enero de 2025 y las
+llamadas de las secciones 2, 3 y 6; la fecha de descarga está en `llamadas.json`). Las cifras
+son las que daba el API ese día; sólo se omite la
+comprobación del cliente de la app en la sección 12, que necesita el API, y `PERIODO` debe
+quedarse en `None`.
+
+Quien tiene clave puede correrlo en vivo definiéndola antes de abrir Jupyter, o actualizar la
+copia cuando el API publique meses nuevos:
+
+```powershell
+$env:SIMBAD_API_KEY = "tu_clave"          # en bash: export SIMBAD_API_KEY="tu_clave"
+python scripts/guardar_instantanea.py     # vuelve a descargar notebooks/datos/
+```
+
+La clave es personal: no se escribe en el notebook ni en ningún archivo del repositorio.
+
 El notebook se genera con `notebooks/generar_notebook.py`. Si cambias su contenido,
 edita el generador y vuelve a crearlo y ejecutarlo:
 
@@ -181,9 +201,11 @@ simbad/
 notebooks/
     estudio_precios_tarjetas.ipynb   El estudio paso a paso, ya ejecutado
     generar_notebook.py              Genera el notebook
+    datos/                           Copia del API para correrlo sin clave
     referencia_simbad/               Valores del panel público para verificar el método
     salidas/                         CSV que exporta el notebook
 scripts/
+    guardar_instantanea.py  Vuelve a descargar notebooks/datos/ (necesita clave)
     api_crudo.py            Muestra el tarifario tal cual lo devuelve el API
 .streamlit/config.toml      Tema oscuro con la escala de colores validada
 ```

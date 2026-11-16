@@ -1,0 +1,101 @@
+{
+  "descargado": "2026-11-15 19:50",
+  "ultimo": "2026-05",
+  "periodo": "2026-05",
+  "sondeo": [
+    {
+      "periodo": "2026-11",
+      "http": 200,
+      "registros": 0
+    },
+    {
+      "periodo": "2026-10",
+      "http": 200,
+      "registros": 0
+    },
+    {
+      "periodo": "2026-09",
+      "http": 200,
+      "registros": 0
+    },
+    {
+      "periodo": "2026-08",
+      "http": 200,
+      "registros": 0
+    },
+    {
+      "periodo": "2026-07",
+      "http": 200,
+      "registros": 0
+    },
+    {
+      "periodo": "2026-06",
+      "http": 200,
+      "registros": 0
+    },
+    {
+      "periodo": "2026-05",
+      "http": 200,
+      "registros": 5
+    }
+  ],
+  "primera_llamada": {
+    "mes": "2025-11",
+    "url": "https://apis.sb.gob.do/estadisticas/v2/tasas-comisiones/tarjetas-credito?periodoInicial=2025-11&periodoFinal=2025-11&tipoEntidad=BM&tipoEntidad=AAyP&tipoEntidad=BAyC&paginas=1&registros=3",
+    "http": 200,
+    "segundos": 0.503285,
+    "x_pagination": {
+      "CurrentPage": 1,
+      "RequestRecords": 3,
+      "RecordsResponse": 3,
+      "HasPrevious": false,
+      "HasNext": true,
+      "TotalRecords": 16180,
+      "TotalPages": 5394
+    },
+    "primer_registro": {
+      "periodo": "2025-11",
+      "tipoEntidad": "BANCOS MÚLTIPLES",
+      "entidad": "BANESCO",
+      "nombreProducto": "Signature Business Personal",
+      "marca": "Visa",
+      "tipoTarjeta": "TARJETA DE CREDITO CORPORATIVA",
+      "moneda": "DOP",
+      "concepto": "Cargo por Renovación",
+      "periodicidad": "ANUAL",
+      "formatoTarifa": "Monto Fijo",
+      "valor": 1500,
+      "valorMinimo": 0,
+      "valorMaximo": 0,
+      "unidadValor": "DOP"
+    }
+  },
+  "errores": [
+    {
+      "caso": "Sin tipoEntidad ni entidad",
+      "http": 400,
+      "texto": "{\"Succeeded\":false,\"Message\":\"Se debe introducir entidad o tipo de entidad.\",\"Errors\":null,\"Data\":null}"
+    },
+    {
+      "caso": "tipoEntidad=CC (corporaciones)",
+      "http": 400,
+      "texto": "{\"Succeeded\":false,\"Message\":\"Se introdujo un tipo de entidad incorrecto o faltan caracteres.\",\"Errors\":null,\""
+    },
+    {
+      "caso": "tipoEntidad=BM,AAyP (con comas)",
+      "http": 400,
+      "texto": "{\"Succeeded\":false,\"Message\":\"Se introdujo un tipo de entidad incorrecto o faltan caracteres.\",\"Errors\":null,\""
+    }
+  ],
+  "paginacion": {
+    "paginas": 17,
+    "anunciados": 16362,
+    "registros": 16362
+  },
+  "una_pagina": {
+    "filas": 16362,
+    "unicas": 8945,
+    "segundos": 10.455843,
+    "iguales": true
+  }
+}
