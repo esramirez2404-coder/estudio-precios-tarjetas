@@ -24,6 +24,8 @@ def code(texto):
 md("""
 # Estudio de precios de tarjetas de crédito — SIMBAD
 
+[![Abrir en Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/esramirez2404-coder/estudio-precios-tarjetas/blob/main/notebooks/estudio_precios_tarjetas.ipynb)
+
 **Materia:** Ciencia de Datos · **Fuente:** API de Estadísticas del Sistema Financiero v2
 (SIMBAD) de la Superintendencia de Bancos de la República Dominicana.
 
@@ -54,7 +56,8 @@ Desde la sección 9 todo el análisis es **sólo del cargo elegido**, igual que 
 la app cuando se elige un cargo: ningún otro servicio entra en las cifras.
 
 > **Cómo usarlo:** cambia `CARGO` en la celda de parámetros y ejecuta
-> *Kernel → Restart Kernel and Run All Cells*. La descarga tarda alrededor de un minuto.
+> *Kernel → Restart Kernel and Run All Cells*. La descarga del mes tarda alrededor de un
+> minuto; la línea de tiempo (sección 11), varios más la primera vez.
 >
 > **Sin clave del API también corre:** usa los datos guardados en `notebooks/datos/`
 > (sección 2.1), con las cifras del día en que se guardaron.
@@ -65,6 +68,7 @@ md("## 1. Librerías y parámetros")
 code("""
 import json
 import os
+import subprocess
 import sys
 import time
 import tomllib
@@ -82,6 +86,15 @@ pd.set_option("display.width", 160)
 pd.set_option("display.max_colwidth", 70)
 pd.set_option("display.float_format", "{:,.2f}".format)
 plt.rcParams.update({"figure.figsize": (10, 5), "axes.grid": True, "grid.alpha": 0.3})
+
+# Colab abre sólo este archivo: se trae el resto del proyecto (simbad/ y notebooks/datos/).
+EN_COLAB = "google.colab" in sys.modules
+if EN_COLAB and Path.cwd().name != "notebooks":
+    proyecto = Path("estudio-precios-tarjetas").resolve()
+    if not proyecto.exists():
+        repositorio = "https://github.com/esramirez2404-coder/estudio-precios-tarjetas.git"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", repositorio, str(proyecto)], check=True)
+    os.chdir(proyecto / "notebooks")
 
 # El notebook vive en notebooks/; la raíz del proyecto es la carpeta de arriba.
 RAIZ = Path.cwd().parent if Path.cwd().name == "notebooks" else Path.cwd()
@@ -111,21 +124,33 @@ md("""
 
 El API exige una clave que se obtiene en <https://desarrollador.sb.gob.do> y viaja en la
 cabecera `Ocp-Apim-Subscription-Key`. **Nunca se escribe en el código**: se lee de la
-variable de entorno `SIMBAD_API_KEY` o del mismo archivo que usa la app,
-`.streamlit/secrets.toml`, que está en `.gitignore` y no se sube al repositorio.
+variable de entorno `SIMBAD_API_KEY`, de un secreto de Colab con ese mismo nombre o del
+archivo que usa la app, `.streamlit/secrets.toml`, que está en `.gitignore` y no se sube al
+repositorio.
+
+**Para verlo en vivo desde Colab:** en el panel 🔑 *Secrets* (a la izquierda), crea
+`SIMBAD_API_KEY`, pega la clave, activa *Notebook access* y ejecuta todo de nuevo.
 
 **Sin clave también corre.** Si no la encuentra, usa los datos guardados en `notebooks/datos/`,
 descargados con esta misma consulta por `scripts/guardar_instantanea.py`. Las cifras son las de
 ese día: sólo cambia que las llamadas de las secciones 2, 3 y 6 se muestran tal como se
-guardaron, y que una comprobación de la sección 12, que necesita el API, se omite.
+guardaron, y que una comprobación de la sección 12, que necesita el API, se omite. Lo mismo
+pasa si hay clave pero el API no responde: el notebook lo avisa y sigue con esos datos.
 """)
 
 code("""
 def leer_clave() -> str:
-    \"\"\"Clave del API: primero la variable de entorno, luego el secrets.toml de la app.\"\"\"
+    \"\"\"Clave del API: variable de entorno, secreto de Colab o el secrets.toml de la app.\"\"\"
     clave = os.environ.get("SIMBAD_API_KEY", "").strip()
     if clave:
         return clave
+    if EN_COLAB:
+        from google.colab import userdata
+
+        try:
+            return (userdata.get("SIMBAD_API_KEY") or "").strip()
+        except Exception as exc:   # no existe el secreto, o no se le dio acceso al notebook
+            print(f"Sin secreto SIMBAD_API_KEY en Colab ({type(exc).__name__}).")
     secretos = RAIZ / ".streamlit" / "secrets.toml"
     if secretos.exists():
         with secretos.open("rb") as archivo:
@@ -136,14 +161,33 @@ def leer_clave() -> str:
 API_KEY = leer_clave()
 EN_VIVO = bool(API_KEY)
 DATOS = RAIZ / "notebooks" / "datos"
+GUARDADO = json.loads((DATOS / "llamadas.json").read_text(encoding="utf-8")) if (DATOS / "llamadas.json").exists() else None
+
+
+def usar_guardados(motivo: str) -> None:
+    # A partir de aquí no se vuelve a llamar al API: el resto sale de notebooks/datos/.
+    global EN_VIVO
+    if GUARDADO is None:
+        raise RuntimeError(f"{motivo}, y no hay datos guardados: define SIMBAD_API_KEY o ejecuta scripts/guardar_instantanea.py")
+    EN_VIVO = False
+    print(f"{motivo}: se usan los datos de notebooks/datos/, descargados el {GUARDADO['descargado']} "
+          f"con la misma consulta (último mes publicado entonces: {GUARDADO['ultimo']}).")
+
+
+def motivo_del_fallo(exc: Exception) -> str:
+    respuesta = getattr(exc, "response", None)
+    if respuesta is None:
+        return f"El API no respondió ({type(exc).__name__})"
+    if respuesta.status_code in (401, 403):
+        return f"El API no aceptó la clave (HTTP {respuesta.status_code})"
+    return f"El API respondió con error (HTTP {respuesta.status_code})"
+
+
+FALLOS_API = (requests.RequestException, ValueError, LookupError, RuntimeError)
 if EN_VIVO:
     print(f"Clave cargada ({len(API_KEY)} caracteres). No se imprime: es un secreto.")
-elif (DATOS / "llamadas.json").exists():
-    GUARDADO = json.loads((DATOS / "llamadas.json").read_text(encoding="utf-8"))
-    print(f"Sin clave: se usan los datos de notebooks/datos/, descargados el {GUARDADO['descargado']} "
-          f"con la misma consulta (último mes publicado entonces: {GUARDADO['ultimo']}).")
 else:
-    raise RuntimeError("Sin clave ni datos guardados: define SIMBAD_API_KEY o ejecuta scripts/guardar_instantanea.py")
+    usar_guardados("Sin clave")
 
 
 def leer_guardados(meses: list[str]) -> tuple[pd.DataFrame, list[str]]:
@@ -221,15 +265,19 @@ cuántos registros y páginas tiene la consulta completa.
 code("""
 mes_prueba = str(pd.Timestamp.today().to_period("M") - 12)
 if EN_VIVO:
-    respuesta = consultar(parametros(mes_prueba, registros=3))
-    llamada = {
-        "url": respuesta.url,
-        "http": respuesta.status_code,
-        "segundos": respuesta.elapsed.total_seconds(),
-        "x_pagination": json.loads(respuesta.headers.get("x-pagination", "{}")),
-        "primer_registro": respuesta.json()[0],
-    }
-else:
+    try:
+        respuesta = consultar(parametros(mes_prueba, registros=3))
+        respuesta.raise_for_status()
+        llamada = {
+            "url": respuesta.url,
+            "http": respuesta.status_code,
+            "segundos": respuesta.elapsed.total_seconds(),
+            "x_pagination": json.loads(respuesta.headers.get("x-pagination", "{}")),
+            "primer_registro": respuesta.json()[0],
+        }
+    except FALLOS_API as exc:
+        usar_guardados(motivo_del_fallo(exc))
+if not EN_VIVO:
     llamada = GUARDADO["primera_llamada"]
     print(f"(Respuesta guardada el {GUARDADO['descargado']}, mes {llamada['mes']})")
 
@@ -256,10 +304,13 @@ casos = {
                                          ("tipoEntidad", "BM,AAyP"), ("registros", "3")],
 }
 if EN_VIVO:
-    for caso, params in casos.items():
-        r = consultar(params)
-        print(f"{caso:<34} → HTTP {r.status_code}: {r.text[:110]}")
-else:
+    try:
+        for caso, params in casos.items():
+            r = consultar(params)
+            print(f"{caso:<34} → HTTP {r.status_code}: {r.text[:110]}")
+    except FALLOS_API as exc:
+        usar_guardados(motivo_del_fallo(exc))
+if not EN_VIVO:
     print(f"(Respuestas guardadas el {GUARDADO['descargado']})")
     for caso in GUARDADO["errores"]:
         print(f"{caso['caso']:<34} → HTTP {caso['http']}: {caso['texto']}")
@@ -290,11 +341,15 @@ def ultimo_periodo(meses_atras: int = 15) -> tuple[str, pd.DataFrame]:
 
 
 if EN_VIVO:
-    ultimo, sondeo = ultimo_periodo()
-else:
+    try:
+        ultimo, sondeo = ultimo_periodo()
+    except FALLOS_API as exc:
+        usar_guardados(motivo_del_fallo(exc))
+if not EN_VIVO:
     ultimo, sondeo = GUARDADO["ultimo"], pd.DataFrame(GUARDADO["sondeo"])
 display(sondeo)
-PERIODO = PERIODO or ultimo
+PERIODO_PEDIDO = PERIODO
+PERIODO = PERIODO_PEDIDO or ultimo
 print("Último mes publicado:", ultimo, "| Período que se analiza:", PERIODO)
 """)
 
@@ -327,10 +382,14 @@ def descargar(periodo: str) -> pd.DataFrame:
 
 
 if EN_VIVO:
-    crudo = descargar(PERIODO)
-elif PERIODO != GUARDADO["periodo"]:
-    raise RuntimeError(f"Sin clave sólo hay datos de {GUARDADO['periodo']}: deja PERIODO = None o define SIMBAD_API_KEY.")
-else:
+    try:
+        crudo = descargar(PERIODO)
+    except FALLOS_API as exc:
+        usar_guardados(motivo_del_fallo(exc))
+if not EN_VIVO:
+    if PERIODO_PEDIDO not in (None, GUARDADO["periodo"]):
+        raise RuntimeError(f"Sin conexión al API sólo hay datos de {GUARDADO['periodo']}: deja PERIODO = None.")
+    PERIODO, ultimo = GUARDADO["periodo"], GUARDADO["ultimo"]
     crudo = pd.read_parquet(DATOS / f"crudo_{PERIODO}.parquet")
     paginas = GUARDADO["paginacion"]
     print(f"{len(crudo):,} registros guardados; llegaron en {paginas['paginas']} páginas "
@@ -397,17 +456,21 @@ repeticiones vienen del propio API y no de cómo se recorrieron las páginas.
 code("""
 clave = lambda df: set(map(tuple, df.astype(str)[sorted(df.columns)].drop_duplicates().to_numpy()))
 if EN_VIVO:
-    r = consultar(parametros(PERIODO, registros=20000))
-    una_pagina = pd.DataFrame(r.json())
-    prueba = {
-        "filas": len(una_pagina),
-        "unicas": len(una_pagina.drop_duplicates()),
-        "segundos": r.elapsed.total_seconds(),
-        "iguales": clave(una_pagina) == clave(crudo),
-    }
-else:
+    try:
+        r = consultar(parametros(PERIODO, registros=20000))
+        r.raise_for_status()
+        una_pagina = pd.DataFrame(r.json())
+        prueba = {
+            "filas": len(una_pagina),
+            "unicas": len(una_pagina.drop_duplicates()),
+            "segundos": r.elapsed.total_seconds(),
+            "iguales": clave(una_pagina) == clave(crudo),
+        }
+    except FALLOS_API as exc:
+        usar_guardados(motivo_del_fallo(exc))
+if not EN_VIVO:
     prueba = GUARDADO["una_pagina"]
-    print(f"(Prueba hecha el {GUARDADO['descargado']}: sin clave no se puede repetir)")
+    print(f"(Prueba hecha el {GUARDADO['descargado']} con {GUARDADO['periodo']}: sin conexión al API no se puede repetir)")
 
 print(f"Una sola página: {prueba['filas']:,} filas, {prueba['unicas']:,} únicas en {prueba['segundos']:.1f} s")
 print("¿Mismas filas únicas que la descarga paginada?", prueba["iguales"])
@@ -743,6 +806,10 @@ meses_linea = meses_de_la_linea(meses_a[0], meses_b[-1], meses_a + meses_b)
 
 inicio = time.perf_counter()
 historia, fallidos = descargar_meses(API_KEY, meses_linea) if EN_VIVO else leer_guardados(meses_linea)
+if EN_VIVO and fallidos:
+    print("El API no respondió para", fallidos, "→ esos meses se toman de notebooks/datos/")
+    guardada, fallidos = leer_guardados(fallidos)
+    historia = pd.concat([historia, guardada], ignore_index=True)
 assert not fallidos, f"No se pudieron descargar: {fallidos}. Vuelve a ejecutar esta celda."
 print(f"{len(meses_linea)} meses, {len(historia):,} registros, {time.perf_counter() - inicio:.1f} s")
 """)
@@ -881,7 +948,7 @@ mismas cifras que la app. Si algo no coincidiera, la celda fallaría.
 
 code("""
 from simbad import estudio_tarjetas as estudio
-from simbad.client import SimbadClient
+from simbad.client import SimbadAPIError, SimbadClient
 
 assert estudio.GAMAS == GAMAS and estudio.ORDEN_GAMAS == ORDEN_GAMAS
 assert estudio.PATRON_SUPERIOR == PATRON_SUPERIOR
@@ -914,14 +981,18 @@ np.testing.assert_allclose(
 print("OK: precio por entidad, estadística descriptiva, descomposición, atípicos y línea de tiempo coinciden con la app.")
 
 if EN_VIVO:
-    cliente = SimbadClient(API_KEY)
-    filas, informe = cliente.fetch_raw(
-        "TasasComisionesTarjetasCredito", PERIODO, PERIODO, filters={"tipoEntidad": TIPOS_ACEPTADOS}, page_size=20000
-    )
+    try:
+        cliente = SimbadClient(API_KEY)
+        filas, informe = cliente.fetch_raw(
+            "TasasComisionesTarjetasCredito", PERIODO, PERIODO, filters={"tipoEntidad": TIPOS_ACEPTADOS}, page_size=20000
+        )
+    except SimbadAPIError as exc:
+        usar_guardados(f"El API no respondió ({type(exc).__name__})")
+if EN_VIVO:
     assert len(filas) == len(crudo.drop_duplicates())
     print(f"OK: el cliente de la app descarga los mismos {len(filas):,} registros únicos.")
 else:
-    print("Omitido sin clave: comparar con el cliente de la app exige llamar al API.")
+    print("Omitido sin conexión al API: comparar con el cliente de la app exige llamarlo.")
 """)
 
 md("""
@@ -939,6 +1010,10 @@ code("""
 referencia = pd.read_csv(RAIZ / "notebooks" / "referencia_simbad" / "renovacion_dop.csv", encoding="utf-8-sig")
 meses_ref = sorted(referencia["mes"].unique())
 tarifario_ref, fallidos_ref = descargar_meses(API_KEY, meses_ref) if EN_VIVO else leer_guardados(meses_ref)
+if EN_VIVO and fallidos_ref:
+    print("El API no respondió para", fallidos_ref, "→ esos meses se toman de notebooks/datos/")
+    guardada, fallidos_ref = leer_guardados(fallidos_ref)
+    tarifario_ref = pd.concat([tarifario_ref, guardada], ignore_index=True)
 assert not fallidos_ref, f"No se pudieron descargar: {fallidos_ref}"
 renovacion = estudio.precios_personales(tarifario_ref, "DOP", corregir=False)
 renovacion = renovacion[renovacion["concepto"] == "Cargo por Renovación"]

@@ -9,7 +9,8 @@ la cobra?
 El proyecto responde con datos del API de **Estadísticas del Sistema Financiero v2
 (SIMBAD)** de la Superintendencia de Bancos de la República Dominicana, en dos formatos:
 
-- una **app de Streamlit** con la página *Precios de tarjetas*;
+- una **app de Streamlit** con la página *Precios de tarjetas*:
+  <https://estudio-precios-tarjetas.streamlit.app>;
 - un **notebook** que hace el mismo recorrido paso a paso, de la conexión al API al
   análisis del cargo, con el código a la vista.
 
@@ -21,7 +22,8 @@ mes publicado no cambia. Esa carpeta no se sube al repositorio y se puede borrar
 ## Requisitos
 
 - Python 3.11 o superior.
-- Una clave de suscripción del portal <https://desarrollador.sb.gob.do>.
+- Una clave de suscripción del portal <https://desarrollador.sb.gob.do>, sólo para consultar
+  el API en vivo: el notebook también corre sin ella.
 
 ## Instalación
 
@@ -152,6 +154,15 @@ que sus cifras coinciden con las de la app.
 Se usa cambiando `CARGO` en la celda de parámetros y ejecutando todo de nuevo (*Restart
 Kernel and Run All Cells*). La clave nunca se imprime. Los CSV que exporta quedan en
 `notebooks/salidas/`, que no se sube al repositorio.
+
+### En Colab
+
+[![Abrir en Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/esramirez2404-coder/estudio-precios-tarjetas/blob/main/notebooks/estudio_precios_tarjetas.ipynb)
+
+La primera celda trae el resto del proyecto, así que basta con *Entorno de ejecución → Ejecutar
+todas*. Sin clave usa los datos guardados. Para verlo conectado al API, crea el secreto
+`SIMBAD_API_KEY` en el panel 🔑 *Secrets*, activa *Notebook access* y ejecuta todo de nuevo; la
+línea de tiempo tarda varios minutos porque baja mes a mes.
 
 ### Correrlo sin clave
 

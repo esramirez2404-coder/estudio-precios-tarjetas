@@ -27,3 +27,6 @@ Thumbs.db
 
 # Referencia del panel público para verificar el método; sí se sube.
 !notebooks/referencia_simbad/*.csv
+
+# Copias del notebook que llevan la clave dentro: nunca se suben.
+*PRIVADO*.ipynb
