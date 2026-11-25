@@ -28,10 +28,11 @@ METALES = {
 _ESTILO = """
 <style>
 .tj-escena { display: flex; justify-content: center; padding: .5rem 0 1rem; perspective: 1100px; }
+/* clip y no hidden: en pantallas estrechas deja crecer la tarjeta si el texto no cabe. */
 .tj-tarjeta {
   position: relative; box-sizing: border-box; display: flex; flex-direction: column;
   width: 100%; max-width: 430px; aspect-ratio: 1.586 / 1; padding: 1.1rem 1.35rem;
-  border-radius: 18px; overflow: hidden; color: var(--tj-tinta);
+  border-radius: 18px; overflow: clip; color: var(--tj-tinta);
   background: linear-gradient(135deg, var(--tj-a) 0%, var(--tj-b) 58%, var(--tj-c) 100%);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.28), inset 0 0 0 1px rgba(255,255,255,.08),
               0 28px 50px -22px rgba(0,0,0,.75), 0 10px 18px -12px rgba(0,0,0,.6);
